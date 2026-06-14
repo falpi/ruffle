@@ -94,12 +94,8 @@ impl<'gc> XmlObject<'gc> {
         activation: &mut Activation<'_, 'gc>,
         name: &Multiname<'gc>,
     ) -> XmlListObject<'gc> {
-        let matched_children = if let E4XNodeKind::Element {
-            children,
-            attributes,
-            ..
-        } = &*self.0.node.get().kind()
-        {
+        let matched_children = if let E4XNodeKind::Element(elem) = &*self.0.node.get().kind() {
+            let (children, attributes) = (&elem.children, &elem.attributes);
             let search_children = if name.is_attribute() {
                 attributes
             } else {
@@ -146,8 +142,8 @@ impl<'gc> XmlObject<'gc> {
         if let Some(local_name) = name.local_name()
             && let Ok(index) = local_name.parse::<usize>()
         {
-            let result = if let E4XNodeKind::Element { children, .. } = &*self.node().kind() {
-                if let Some(node) = children.get(index) {
+            let result = if let E4XNodeKind::Element(elem) = &*self.node().kind() {
+                if let Some(node) = elem.children.get(index) {
                     vec![E4XOrXml::E4X(*node)]
                 } else {
                     Vec::new()
@@ -176,8 +172,8 @@ impl<'gc> XmlObject<'gc> {
         name: &Multiname<'gc>,
         activation: &mut Activation<'_, 'gc>,
     ) -> XmlListObject<'gc> {
-        let children = if let E4XNodeKind::Element { children, .. } = &*self.node().kind() {
-            children
+        let children = if let E4XNodeKind::Element(elem) = &*self.node().kind() {
+            elem.children
                 .iter()
                 .filter(|node| node.is_element() && node.matches_name(name))
                 .map(|node| E4XOrXml::E4X(*node))
@@ -584,11 +580,11 @@ impl<'gc> TObject<'gc> for XmlObject<'gc> {
                     *old_value = value;
 
                     let node = self.0.node.get();
-                    let E4XNodeKind::Element { attributes, .. } = &mut *node.kind_mut(gc) else {
+                    let E4XNodeKind::Element(elem) = &mut *node.kind_mut(gc) else {
                         return Ok(());
                     };
                     old_attr.set_parent(Some(self.node()), gc);
-                    attributes.insert(index, old_attr);
+                    elem.attributes.insert(index, old_attr);
                     old_value_copy
                 };
 
@@ -615,10 +611,10 @@ impl<'gc> TObject<'gc> for XmlObject<'gc> {
                 {
                     // 6.f.iv. Let x.[[Attributes]] = x.[[Attributes]] ∪ { a }
                     let node = self.0.node.get();
-                    let E4XNodeKind::Element { attributes, .. } = &mut *node.kind_mut(gc) else {
+                    let E4XNodeKind::Element(elem) = &mut *node.kind_mut(gc) else {
                         return Ok(());
                     };
-                    attributes.push(attr);
+                    elem.attributes.push(attr);
                 }
 
                 self.trigger_notification(
@@ -730,22 +726,20 @@ impl<'gc> TObject<'gc> for XmlObject<'gc> {
             // NOTE: The child is extracted in its own scope so that no borrow is
             //       held when [[Replace]] triggers a "textSet" notification below.
             let child = {
-                let E4XNodeKind::Element { children, .. } =
-                    &mut *self_node.kind_mut(activation.gc())
-                else {
+                let E4XNodeKind::Element(elem) = &mut *self_node.kind_mut(activation.gc()) else {
                     unreachable!("Node should be of Element kind");
                 };
-                children[index]
+                elem.children[index]
             };
 
             // avmplus captures the first child before clearing, so the "textSet"
             // below can still report the replaced content as detail.
             let past_value = if notify {
                 let first = {
-                    let E4XNodeKind::Element { children, .. } = &*child.kind() else {
+                    let E4XNodeKind::Element(elem) = &*child.kind() else {
                         unreachable!("Node should be of Element kind");
                     };
-                    children.first().copied()
+                    elem.children.first().copied()
                 };
                 first.map(|node| XmlObject::new(node, activation).into())
             } else {
@@ -869,9 +863,10 @@ impl<'gc> TObject<'gc> for XmlObject<'gc> {
         let mut removed_children = Vec::new();
 
         {
-            let E4XNodeKind::Element { children, .. } = &mut *node.kind_mut(activation.gc()) else {
+            let E4XNodeKind::Element(elem) = &mut *node.kind_mut(activation.gc()) else {
                 return Ok(true);
             };
+            let children = &mut elem.children;
 
             // 4. Let dp = 0
             // 5. For q = 0 to x.[[Length]]-1

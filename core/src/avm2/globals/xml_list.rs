@@ -235,8 +235,8 @@ pub fn children<'gc>(
     let children = list.children();
     let mut sub_children = Vec::new();
     for child in &*children {
-        if let E4XNodeKind::Element { children, .. } = &*child.node().kind() {
-            sub_children.extend(children.iter().map(|node| E4XOrXml::E4X(*node)));
+        if let E4XNodeKind::Element(elem) = &*child.node().kind() {
+            sub_children.extend(elem.children.iter().map(|node| E4XOrXml::E4X(*node)));
         }
     }
     // FIXME: This method should just call get_property_local with "*".
@@ -303,8 +303,9 @@ pub fn attribute<'gc>(
     let children = list.children();
     let mut sub_children = Vec::new();
     for child in &*children {
-        if let E4XNodeKind::Element { attributes, .. } = &*child.node().kind()
-            && let Some(found) = attributes
+        if let E4XNodeKind::Element(elem) = &*child.node().kind()
+            && let Some(found) = elem
+                .attributes
                 .iter()
                 .find(|node| node.matches_name(&multiname))
                 .copied()
@@ -334,8 +335,8 @@ pub fn attributes<'gc>(
 
     let mut child_attrs = Vec::new();
     for child in list.children().iter() {
-        if let E4XNodeKind::Element { attributes, .. } = &*child.node().kind() {
-            child_attrs.extend(attributes.iter().map(|node| E4XOrXml::E4X(*node)));
+        if let E4XNodeKind::Element(elem) = &*child.node().kind() {
+            child_attrs.extend(elem.attributes.iter().map(|node| E4XOrXml::E4X(*node)));
         }
     }
 
@@ -375,9 +376,9 @@ pub fn text<'gc>(
     let xml_list = this.as_xml_list_object().unwrap();
     let mut nodes = Vec::new();
     for child in xml_list.children().iter() {
-        if let E4XNodeKind::Element { children, .. } = &*child.node().kind() {
+        if let E4XNodeKind::Element(elem) = &*child.node().kind() {
             nodes.extend(
-                children
+                elem.children
                     .iter()
                     .filter(|node| node.is_text())
                     .map(|node| E4XOrXml::E4X(*node)),
@@ -399,9 +400,9 @@ pub fn comments<'gc>(
     let xml_list = this.as_xml_list_object().unwrap();
     let mut nodes = Vec::new();
     for child in xml_list.children().iter() {
-        if let E4XNodeKind::Element { children, .. } = &*child.node().kind() {
+        if let E4XNodeKind::Element(elem) = &*child.node().kind() {
             nodes.extend(
-                children
+                elem.children
                     .iter()
                     .filter(|node| matches!(&*node.kind(), E4XNodeKind::Comment(_)))
                     .map(|node| E4XOrXml::E4X(*node)),
@@ -464,9 +465,9 @@ pub fn processing_instructions<'gc>(
     let multiname = name_to_multiname(activation, args.get_value(0), false)?;
     let mut nodes = Vec::new();
     for child in xml_list.children().iter() {
-        if let E4XNodeKind::Element { children, .. } = &*child.node().kind() {
+        if let E4XNodeKind::Element(elem) = &*child.node().kind() {
             nodes.extend(
-                children
+                elem.children
                     .iter()
                     .filter(|node| {
                         matches!(&*node.kind(), E4XNodeKind::ProcessingInstruction(_))
