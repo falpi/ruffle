@@ -744,7 +744,8 @@ impl<'gc> TObject<'gc> for XmlListObject<'gc> {
                 if !y.is_attribute() {
                     // 2.c.viii.1. If r is not null
                     if let Some(r) = r {
-                        let j = if let E4XNodeKind::Element { children, .. } = &*r.kind() {
+                        let j = if let E4XNodeKind::Element(elem) = &*r.kind() {
+                            let children = &elem.children;
                             // 2.c.viii.1.a. If (i > 0)
                             let j = if index > 0 {
                                 // 2.c.viii.1.a.i. Let j = 0
@@ -878,8 +879,10 @@ impl<'gc> TObject<'gc> for XmlListObject<'gc> {
                 // 2.f.iii. If parent is not null
                 if let Some(parent) = parent {
                     // 2.f.iii.1. Let q be the property of parent, such that parent[q] is the same object as x[i]
-                    let q = if let E4XNodeKind::Element { children, .. } = &*parent.kind() {
-                        children.iter().position(|x| E4XNode::ptr_eq(*x, child))
+                    let q = if let E4XNodeKind::Element(elem) = &*parent.kind() {
+                        elem.children
+                            .iter()
+                            .position(|x| E4XNode::ptr_eq(*x, child))
                     } else {
                         None
                     };
@@ -889,9 +892,10 @@ impl<'gc> TObject<'gc> for XmlListObject<'gc> {
                         parent.replace(q, c.into(), None, activation)?;
 
                         {
-                            let E4XNodeKind::Element { children, .. } = &*parent.kind() else {
+                            let E4XNodeKind::Element(elem) = &*parent.kind() else {
                                 unreachable!()
                             };
+                            let children = &elem.children;
 
                             // 2.f.iii.3. For j = 0 to c.[[Length]]-1
                             for (index, child) in
@@ -964,8 +968,10 @@ impl<'gc> TObject<'gc> for XmlListObject<'gc> {
                 // 2.g.ii. If parent is not null
                 if let Some(parent) = parent {
                     // 2.g.ii.1. Let q be the property of parent, such that parent[q] is the same object as x[i]
-                    let q = if let E4XNodeKind::Element { children, .. } = &*parent.kind() {
-                        children.iter().position(|x| E4XNode::ptr_eq(*x, child))
+                    let q = if let E4XNodeKind::Element(elem) = &*parent.kind() {
+                        elem.children
+                            .iter()
+                            .position(|x| E4XNode::ptr_eq(*x, child))
                     } else {
                         None
                     };
@@ -975,9 +981,10 @@ impl<'gc> TObject<'gc> for XmlListObject<'gc> {
                         parent.replace(q, value, None, activation)?;
 
                         {
-                            let E4XNodeKind::Element { children, .. } = &*parent.kind() else {
+                            let E4XNodeKind::Element(elem) = &*parent.kind() else {
                                 unreachable!()
                             };
+                            let children = &elem.children;
 
                             // 2.g.ii.3. Let V = parent[q]
                             value = XmlObject::new(children[q], activation).into();
