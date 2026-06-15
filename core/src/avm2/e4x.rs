@@ -91,6 +91,37 @@ pub fn handle_input_multiname<'gc>(
 
 pub use is_xml_name::is_xml_name;
 
+/// Maximum payload length, in UTF-8 bytes, that is routed through the
+/// `AvmStringInterner` on E4X parse. Short payloads (column values, status
+/// codes, flags, dates) deduplicate near-perfectly in typical data-XML
+/// workloads and benefit greatly from sharing one `AvmStringRepr` across
+/// many leaf nodes. Longer free-text rarely deduplicates, and the cost of a
+/// hash-table miss + insert with no payoff is paid for nothing — so above
+/// this cap we fall back to a fresh allocation.
+const DEDUP_MAX_LEN_BYTES: usize = 64;
+
+/// Intern a short value payload (text/CData/comment/attribute value) when
+/// it fits the dedup cap; otherwise return a fresh `AvmString`. The cap
+/// keeps the intern table tight on free-text-heavy XML.
+#[inline]
+fn intern_short_value<'gc>(activation: &mut Activation<'_, 'gc>, bytes: &[u8]) -> AvmString<'gc> {
+    if bytes.len() <= DEDUP_MAX_LEN_BYTES {
+        let wstr = ruffle_wstr::from_utf8_bytes(bytes);
+        activation.strings().intern_wstr(wstr).into()
+    } else {
+        AvmString::new_utf8_bytes(activation.gc(), bytes)
+    }
+}
+
+/// Intern a name-like string (namespace URI / prefix, processing
+/// instruction target). No length cap — these are bounded in cardinality
+/// per document and near-fully deduplicate.
+#[inline]
+fn intern_name_bytes<'gc>(activation: &mut Activation<'_, 'gc>, bytes: &[u8]) -> AvmString<'gc> {
+    let wstr = ruffle_wstr::from_utf8_bytes(bytes);
+    activation.strings().intern_wstr(wstr).into()
+}
+
 /// The underlying XML node data, based on E4XNode in avmplus
 /// This wrapped by XMLObject when necessary (see `E4XOrXml`)
 #[derive(Copy, Clone, Collect, Debug)]
@@ -920,14 +951,12 @@ impl<'gc> E4XNode<'gc> {
             let is_whitespace_char = |c: &u8| matches!(*c, b'\t' | b'\n' | b'\r' | b' ');
             let is_whitespace_text = text.iter().all(is_whitespace_char);
             if !(is_text && ignore_white && is_whitespace_text) {
-                let text = AvmString::new_utf8_bytes(
-                    activation.gc(),
-                    if is_text && ignore_white {
-                        text.trim_ascii()
-                    } else {
-                        text
-                    },
-                );
+                let bytes = if is_text && ignore_white {
+                    text.trim_ascii()
+                } else {
+                    text
+                };
+                let text = intern_short_value(activation, bytes);
                 let node = E4XNode(Gc::new(
                     activation.gc(),
                     E4XNodeData {
@@ -1042,7 +1071,7 @@ impl<'gc> E4XNode<'gc> {
 
                     let text = avm2_unescape(bt)
                         .map_err(|_| make_xml_error(activation, XmlErrorCode::ElementMalformed))?;
-                    let text = AvmString::new_utf8(activation.gc(), text);
+                    let text = intern_short_value(activation, text.as_bytes());
 
                     let node = E4XNode(Gc::new(
                         activation.gc(),
@@ -1067,17 +1096,11 @@ impl<'gc> E4XNode<'gc> {
 
                     let (name, value) = if let Some((name, value)) = text.split_once(' ') {
                         (
-                            AvmString::new_utf8_bytes(activation.gc(), name.as_bytes()),
-                            AvmString::new_utf8_bytes(
-                                activation.gc(),
-                                value.trim_start().as_bytes(),
-                            ),
+                            intern_name_bytes(activation, name.as_bytes()),
+                            intern_short_value(activation, value.trim_start().as_bytes()),
                         )
                     } else {
-                        (
-                            AvmString::new_utf8_bytes(activation.gc(), text.as_bytes()),
-                            istr!(""),
-                        )
+                        (intern_name_bytes(activation, text.as_bytes()), istr!(""))
                     };
                     let node = E4XNode(Gc::new(
                         activation.gc(),
@@ -1136,7 +1159,7 @@ impl<'gc> E4XNode<'gc> {
         for attribute in attributes {
             let value_str = avm2_unescape(&attribute.value)
                 .map_err(|_| make_xml_error(activation, XmlErrorCode::ElementMalformed))?;
-            let value = AvmString::new_utf8(activation.gc(), value_str);
+            let value = intern_short_value(activation, value_str.as_bytes());
 
             let (ns, local_name) = parser.resolve_attribute(attribute.key);
 
@@ -1152,10 +1175,11 @@ impl<'gc> E4XNode<'gc> {
                     continue;
                 }
                 ResolveResult::Bound(ns) => {
-                    let prefix = attribute.key.prefix().map(|prefix| {
-                        AvmString::new_utf8_bytes(activation.gc(), prefix.into_inner())
-                    });
-                    let uri = AvmString::new_utf8_bytes(activation.gc(), ns.into_inner());
+                    let prefix = attribute
+                        .key
+                        .prefix()
+                        .map(|prefix| intern_name_bytes(activation, prefix.into_inner()));
+                    let uri = intern_name_bytes(activation, ns.into_inner());
                     Some(E4XNamespace { prefix, uri })
                 }
                 ResolveResult::Unknown(ns) => {
@@ -1197,8 +1221,8 @@ impl<'gc> E4XNode<'gc> {
                 let prefix = bs
                     .name()
                     .prefix()
-                    .map(|prefix| AvmString::new_utf8_bytes(activation.gc(), prefix.into_inner()));
-                let uri = AvmString::new_utf8_bytes(activation.gc(), ns.into_inner());
+                    .map(|prefix| intern_name_bytes(activation, prefix.into_inner()));
+                let uri = intern_name_bytes(activation, ns.into_inner());
                 Some(E4XNamespace { prefix, uri })
             }
             ResolveResult::Unknown(ns) => {
