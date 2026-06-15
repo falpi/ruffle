@@ -128,14 +128,54 @@ fn intern_name_bytes<'gc>(activation: &mut Activation<'_, 'gc>, bytes: &[u8]) ->
 #[collect(no_drop)]
 pub struct E4XNode<'gc>(Gc<'gc, E4XNodeData<'gc>>);
 
+/// Side-allocated payload for `E4XNodeData` fields that are unset on
+/// almost every node in a typical data-XML document. Allocated lazily
+/// the first time a node receives a non-`None` namespace or notification
+/// callback; nodes that never need either pay only a single `Lock<Option<Gc>>`
+/// (one pointer) instead of two `Lock<Option<…>>` carrying the values inline.
+#[derive(Collect, Debug, Default)]
+#[collect(no_drop)]
+struct E4XRareData<'gc> {
+    namespace: Lock<Option<E4XNamespace<'gc>>>,
+    notification: Lock<Option<FunctionObject<'gc>>>,
+}
+
 #[derive(Collect)]
 #[collect(no_drop)]
 pub struct E4XNodeData<'gc> {
     parent: Lock<Option<E4XNode<'gc>>>,
-    namespace: Lock<Option<E4XNamespace<'gc>>>,
     local_name: Lock<Option<AvmString<'gc>>>,
     kind: RefLock<E4XNodeKind<'gc>>,
-    notification: Lock<Option<FunctionObject<'gc>>>,
+    rare: Lock<Option<Gc<'gc, E4XRareData<'gc>>>>,
+}
+
+impl<'gc> E4XNodeData<'gc> {
+    fn new(
+        parent: Option<E4XNode<'gc>>,
+        namespace: Option<E4XNamespace<'gc>>,
+        local_name: Option<AvmString<'gc>>,
+        kind: E4XNodeKind<'gc>,
+        mc: &Mutation<'gc>,
+    ) -> Self {
+        // The notification callback is only ever installed post-construction
+        // (see `set_notification`), so a fresh node needs rare data for the
+        // namespace alone.
+        let rare = namespace.map(|namespace| {
+            Gc::new(
+                mc,
+                E4XRareData {
+                    namespace: Lock::new(Some(namespace)),
+                    notification: Lock::new(None),
+                },
+            )
+        });
+        Self {
+            parent: Lock::new(parent),
+            local_name: Lock::new(local_name),
+            kind: RefLock::new(kind),
+            rare: Lock::new(rare),
+        }
+    }
 }
 
 impl Debug for E4XNodeData<'_> {
@@ -241,26 +281,20 @@ impl<'gc> E4XNode<'gc> {
     pub fn dummy(mc: &Mutation<'gc>) -> Self {
         E4XNode(Gc::new(
             mc,
-            E4XNodeData {
-                parent: Lock::new(None),
-                namespace: Lock::new(None),
-                local_name: Lock::new(None),
-                kind: RefLock::new(E4XNodeKind::Element(Box::new(E4XElementData::default()))),
-                notification: Lock::new(None),
-            },
+            E4XNodeData::new(
+                None,
+                None,
+                None,
+                E4XNodeKind::Element(Box::new(E4XElementData::default())),
+                mc,
+            ),
         ))
     }
 
     pub fn text(mc: &Mutation<'gc>, text: AvmString<'gc>, parent: Option<Self>) -> Self {
         E4XNode(Gc::new(
             mc,
-            E4XNodeData {
-                parent: Lock::new(parent),
-                namespace: Lock::new(None),
-                local_name: Lock::new(None),
-                kind: RefLock::new(E4XNodeKind::Text(text)),
-                notification: Lock::new(None),
-            },
+            E4XNodeData::new(parent, None, None, E4XNodeKind::Text(text), mc),
         ))
     }
 
@@ -272,13 +306,13 @@ impl<'gc> E4XNode<'gc> {
     ) -> Self {
         E4XNode(Gc::new(
             mc,
-            E4XNodeData {
-                parent: Lock::new(parent),
-                namespace: Lock::new(namespace),
-                local_name: Lock::new(Some(name)),
-                kind: RefLock::new(E4XNodeKind::Element(Box::new(E4XElementData::default()))),
-                notification: Lock::new(None),
-            },
+            E4XNodeData::new(
+                parent,
+                namespace,
+                Some(name),
+                E4XNodeKind::Element(Box::new(E4XElementData::default())),
+                mc,
+            ),
         ))
     }
 
@@ -291,13 +325,13 @@ impl<'gc> E4XNode<'gc> {
     ) -> Self {
         E4XNode(Gc::new(
             mc,
-            E4XNodeData {
-                parent: Lock::new(parent),
-                namespace: Lock::new(namespace),
-                local_name: Lock::new(Some(name)),
-                kind: RefLock::new(E4XNodeKind::Attribute(value)),
-                notification: Lock::new(None),
-            },
+            E4XNodeData::new(
+                parent,
+                namespace,
+                Some(name),
+                E4XNodeKind::Attribute(value),
+                mc,
+            ),
         ))
     }
 
@@ -396,13 +430,7 @@ impl<'gc> E4XNode<'gc> {
 
         let node = E4XNode(Gc::new(
             mc,
-            E4XNodeData {
-                parent: Lock::new(None),
-                namespace: Lock::new(self.namespace()),
-                local_name: Lock::new(self.local_name()),
-                kind: RefLock::new(kind),
-                notification: Lock::new(None),
-            },
+            E4XNodeData::new(None, self.namespace(), self.local_name(), kind, mc),
         ));
 
         if let E4XNodeKind::Element(elem) = &mut *node.kind_mut(mc) {
@@ -961,17 +989,17 @@ impl<'gc> E4XNode<'gc> {
                 let text = intern_short_value(activation, bytes);
                 let node = E4XNode(Gc::new(
                     activation.gc(),
-                    E4XNodeData {
-                        parent: Lock::new(None),
-                        namespace: Lock::new(None),
-                        local_name: Lock::new(None),
-                        kind: RefLock::new(if is_text {
+                    E4XNodeData::new(
+                        None,
+                        None,
+                        None,
+                        if is_text {
                             E4XNodeKind::Text(text)
                         } else {
                             E4XNodeKind::CData(text)
-                        }),
-                        notification: Lock::new(None),
-                    },
+                        },
+                        activation.gc(),
+                    ),
                 ));
                 push_childless_node(node, open_tags, top_level, activation);
             }
@@ -1074,13 +1102,13 @@ impl<'gc> E4XNode<'gc> {
 
                     let node = E4XNode(Gc::new(
                         activation.gc(),
-                        E4XNodeData {
-                            parent: Lock::new(None),
-                            namespace: Lock::new(None),
-                            local_name: Lock::new(None),
-                            kind: RefLock::new(E4XNodeKind::Comment(text)),
-                            notification: Lock::new(None),
-                        },
+                        E4XNodeData::new(
+                            None,
+                            None,
+                            None,
+                            E4XNodeKind::Comment(text),
+                            activation.gc(),
+                        ),
                     ));
 
                     push_childless_node(node, &mut open_tags, &mut top_level, activation);
@@ -1103,13 +1131,13 @@ impl<'gc> E4XNode<'gc> {
                     };
                     let node = E4XNode(Gc::new(
                         activation.gc(),
-                        E4XNodeData {
-                            parent: Lock::new(None),
-                            namespace: Lock::new(None),
-                            local_name: Lock::new(Some(name)),
-                            kind: RefLock::new(E4XNodeKind::ProcessingInstruction(value)),
-                            notification: Lock::new(None),
-                        },
+                        E4XNodeData::new(
+                            None,
+                            None,
+                            Some(name),
+                            E4XNodeKind::ProcessingInstruction(value),
+                            activation.gc(),
+                        ),
                     ));
 
                     push_childless_node(node, &mut open_tags, &mut top_level, activation);
@@ -1205,13 +1233,13 @@ impl<'gc> E4XNode<'gc> {
 
             let attribute = E4XNode(Gc::new(
                 activation.gc(),
-                E4XNodeData {
-                    parent: Lock::new(None),
-                    namespace: Lock::new(namespace),
-                    local_name: Lock::new(Some(name)),
-                    kind: RefLock::new(E4XNodeKind::Attribute(value)),
-                    notification: Lock::new(None),
-                },
+                E4XNodeData::new(
+                    None,
+                    namespace,
+                    Some(name),
+                    E4XNodeKind::Attribute(value),
+                    activation.gc(),
+                ),
             ));
             attribute_nodes.push(attribute);
         }
@@ -1254,17 +1282,17 @@ impl<'gc> E4XNode<'gc> {
 
         let result = E4XNode(Gc::new(
             activation.gc(),
-            E4XNodeData {
-                parent: Lock::new(None),
-                namespace: Lock::new(namespace),
-                local_name: Lock::new(Some(name)),
-                kind: RefLock::new(E4XNodeKind::Element(Box::new(E4XElementData {
+            E4XNodeData::new(
+                None,
+                namespace,
+                Some(name),
+                E4XNodeKind::Element(Box::new(E4XElementData {
                     attributes: attribute_nodes,
                     children: Vec::new(),
                     namespaces,
-                }))),
-                notification: Lock::new(None),
-            },
+                })),
+                activation.gc(),
+            ),
         ));
 
         let mut result_kind = result.kind_mut(activation.gc());
@@ -1278,12 +1306,43 @@ impl<'gc> E4XNode<'gc> {
         Ok(result)
     }
 
+    /// Lazily allocates the rare-field payload, returning the existing one
+    /// when already present.
+    fn get_or_init_rare(&self, mc: &Mutation<'gc>) -> Gc<'gc, E4XRareData<'gc>> {
+        if let Some(rare) = self.0.rare.get() {
+            rare
+        } else {
+            let rare = Gc::new(mc, E4XRareData::default());
+            unlock!(Gc::write(mc, self.0), E4XNodeData, rare).set(Some(rare));
+            rare
+        }
+    }
+
+    /// Drops the rare-field payload once both fields are back to `None`, so
+    /// nodes that churn through namespace/notification state (e.g. Flex
+    /// watch/unwatch cycles) don't keep the side allocation for the rest of
+    /// their life.
+    fn reclaim_rare(&self, mc: &Mutation<'gc>) {
+        if let Some(rare) = self.0.rare.get()
+            && rare.namespace.get().is_none()
+            && rare.notification.get().is_none()
+        {
+            unlock!(Gc::write(mc, self.0), E4XNodeData, rare).set(None);
+        }
+    }
+
     pub fn set_namespace(&self, namespace: Option<E4XNamespace<'gc>>, mc: &Mutation<'gc>) {
-        unlock!(Gc::write(mc, self.0), E4XNodeData, namespace).set(namespace);
+        // Setting None on a node without rare data is a no-op.
+        if namespace.is_none() && self.0.rare.get().is_none() {
+            return;
+        }
+        let rare = self.get_or_init_rare(mc);
+        unlock!(Gc::write(mc, rare), E4XRareData, namespace).set(namespace);
+        self.reclaim_rare(mc);
     }
 
     pub fn namespace(self) -> Option<E4XNamespace<'gc>> {
-        self.0.namespace.get()
+        self.0.rare.get().and_then(|r| r.namespace.get())
     }
 
     pub fn set_local_name(&self, name: AvmString<'gc>, mc: &Mutation<'gc>) {
@@ -1303,11 +1362,17 @@ impl<'gc> E4XNode<'gc> {
     }
 
     pub fn set_notification(&self, notification: Option<FunctionObject<'gc>>, mc: &Mutation<'gc>) {
-        unlock!(Gc::write(mc, self.0), E4XNodeData, notification).set(notification);
+        // Setting None on a node without rare data is a no-op.
+        if notification.is_none() && self.0.rare.get().is_none() {
+            return;
+        }
+        let rare = self.get_or_init_rare(mc);
+        unlock!(Gc::write(mc, rare), E4XRareData, notification).set(notification);
+        self.reclaim_rare(mc);
     }
 
     pub fn notification(self) -> Option<FunctionObject<'gc>> {
-        self.0.notification.get()
+        self.0.rare.get().and_then(|r| r.notification.get())
     }
 
     /// Whether a change notification on this node would reach a notification
