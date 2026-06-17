@@ -523,7 +523,7 @@ pub fn remove_namespace<'gc>(
         let E4XNodeKind::Element(elem) = &*node.kind() else {
             unreachable!()
         };
-        let attributes = &elem.attributes;
+        let attributes = elem.attributes();
 
         // 5. For each a in x.[[Attributes]]
         for attr in attributes {
@@ -827,7 +827,7 @@ pub fn attributes<'gc>(
 
     let xml = this.as_xml_object().unwrap();
     let attributes = if let E4XNodeKind::Element(elem) = &*xml.node().kind() {
-        elem.attributes
+        elem.attributes()
             .iter()
             .map(|node| E4XOrXml::E4X(*node))
             .collect()
@@ -855,7 +855,7 @@ pub fn attribute<'gc>(
     let xml = this.as_xml_object().unwrap();
     let multiname = name_to_multiname(activation, args.get_value(0), true)?;
     let attributes = if let E4XNodeKind::Element(elem) = &*xml.node().kind() {
-        elem.attributes
+        elem.attributes()
             .iter()
             .filter(|node| node.matches_name(&multiname))
             .map(|node| E4XOrXml::E4X(*node))

@@ -305,7 +305,7 @@ pub fn attribute<'gc>(
     for child in &*children {
         if let E4XNodeKind::Element(elem) = &*child.node().kind()
             && let Some(found) = elem
-                .attributes
+                .attributes()
                 .iter()
                 .find(|node| node.matches_name(&multiname))
                 .copied()
@@ -336,7 +336,7 @@ pub fn attributes<'gc>(
     let mut child_attrs = Vec::new();
     for child in list.children().iter() {
         if let E4XNodeKind::Element(elem) = &*child.node().kind() {
-            child_attrs.extend(elem.attributes.iter().map(|node| E4XOrXml::E4X(*node)));
+            child_attrs.extend(elem.attributes().iter().map(|node| E4XOrXml::E4X(*node)));
         }
     }
 
