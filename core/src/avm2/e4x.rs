@@ -280,7 +280,15 @@ pub struct E4XElementData<'gc> {
     /// Mirrors avmplus's `SINGLECHILDBIT` optimization; elements with two
     /// or more children spill to the heap exactly like a `Vec`.
     pub children: SmallVec<[E4XNode<'gc>; 1]>,
-    pub namespaces: Vec<E4XNamespace<'gc>>,
+    /// In-scope namespace declarations. Boxed behind an `Option` because the
+    /// overwhelming majority of elements (every non-root element in typical
+    /// data XML) declare none, and an empty `Vec` would otherwise cost three
+    /// inline pointers on every element. `None` means "no declarations" and
+    /// allocates nothing.
+    // The `Box<Vec>` is deliberate (and the reason for the lint allow): it
+    // collapses the inline footprint to a single niche-optimized pointer.
+    #[allow(clippy::box_collection)]
+    pub namespaces: Option<Box<Vec<E4XNamespace<'gc>>>>,
 }
 
 /// Abstracts over the two node containers an element holds — `children`
@@ -309,6 +317,21 @@ impl<'gc> E4XNodeContainer<'gc> for SmallVec<[E4XNode<'gc>; 1]> {
 
     fn retain_nodes(&mut self, mut f: impl FnMut(E4XNode<'gc>) -> bool) {
         self.retain(|node| f(*node));
+    }
+}
+
+impl<'gc> E4XElementData<'gc> {
+    /// The element's in-scope namespace declarations as a slice (empty when
+    /// it has none). Reads should go through this rather than touching the
+    /// lazily-boxed field.
+    pub fn namespaces(&self) -> &[E4XNamespace<'gc>] {
+        self.namespaces.as_deref().map_or(&[], |v| v.as_slice())
+    }
+
+    /// The namespace-declaration list for mutation, materializing the
+    /// lazily-boxed storage on first use.
+    pub fn namespaces_mut(&mut self) -> &mut Vec<E4XNamespace<'gc>> {
+        self.namespaces.get_or_insert_with(Default::default)
     }
 }
 
@@ -459,7 +482,9 @@ impl<'gc> E4XNode<'gc> {
                     .iter()
                     .map(|child| child.deep_copy(mc))
                     .collect(),
-                namespaces: elem.namespaces.clone(),
+                // `filter` re-normalizes a stale `Some(empty)` back to the
+                // allocation-free `None`.
+                namespaces: elem.namespaces.clone().filter(|ns| !ns.is_empty()),
             })),
         };
 
@@ -1322,7 +1347,11 @@ impl<'gc> E4XNode<'gc> {
                 E4XNodeKind::Element(Box::new(E4XElementData {
                     attributes: attribute_nodes,
                     children: SmallVec::new(),
-                    namespaces,
+                    namespaces: if namespaces.is_empty() {
+                        None
+                    } else {
+                        Some(Box::new(namespaces))
+                    },
                 })),
                 activation.gc(),
             ),
@@ -1469,8 +1498,7 @@ impl<'gc> E4XNode<'gc> {
         let mut next_node = Some(self);
         while let Some(node) = next_node {
             if let E4XNodeKind::Element(elem) = &*node.kind() {
-                let namespaces = &elem.namespaces;
-                for new_ns in namespaces {
+                for new_ns in elem.namespaces() {
                     let found = result.iter().any(|ns| {
                         if new_ns.prefix.is_some() {
                             new_ns.prefix == ns.prefix
@@ -1512,7 +1540,8 @@ impl<'gc> E4XNode<'gc> {
             let E4XNodeKind::Element(elem) = &mut *self.kind_mut(gc) else {
                 unreachable!("must be an element");
             };
-            let namespaces = &mut elem.namespaces;
+            // This always pushes below, so materialize the namespace list.
+            let namespaces = elem.namespaces_mut();
 
             // 2.b. Let match be null
             // 2.c. For each ns in x.[[InScopeNamespaces]]

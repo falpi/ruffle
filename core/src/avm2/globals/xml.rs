@@ -541,18 +541,24 @@ pub fn remove_namespace<'gc>(
         let E4XNodeKind::Element(elem) = &mut *node.kind_mut(activation.gc()) else {
             unreachable!()
         };
-        let namespaces = &mut elem.namespaces;
-
-        // 6. If ns.prefix == undefined
-        if ns.prefix.is_none() {
-            // 6.a. If there exists a namespace n ∈ x.[[InScopeNamespaces]],
-            // such that n.uri == ns.uri, remove the namespace n from x.[[InScopeNamespaces]]
-            namespaces.retain(|namespace| namespace.uri != ns.uri);
-        // 7. Else
-        } else {
-            // 7.a. If there exists a namespace n ∈ x.[[InScopeNamespaces]],
-            // such that n.uri == ns.uri and n.prefix == ns.prefix, remove the namespace n from x.[[InScopeNamespaces]]
-            namespaces.retain(|namespace| *namespace != ns);
+        // Removal only — if the element declares no namespaces there is
+        // nothing to remove, and we avoid materializing an empty list.
+        if let Some(namespaces) = elem.namespaces.as_deref_mut() {
+            // 6. If ns.prefix == undefined
+            if ns.prefix.is_none() {
+                // 6.a. If there exists a namespace n ∈ x.[[InScopeNamespaces]],
+                // such that n.uri == ns.uri, remove the namespace n from x.[[InScopeNamespaces]]
+                namespaces.retain(|namespace| namespace.uri != ns.uri);
+            // 7. Else
+            } else {
+                // 7.a. If there exists a namespace n ∈ x.[[InScopeNamespaces]],
+                // such that n.uri == ns.uri and n.prefix == ns.prefix, remove the namespace n from x.[[InScopeNamespaces]]
+                namespaces.retain(|namespace| *namespace != ns);
+            }
+        }
+        // Collapse back to the allocation-free representation.
+        if elem.namespaces.as_deref().is_some_and(|v| v.is_empty()) {
+            elem.namespaces = None;
         }
     }
 
