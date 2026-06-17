@@ -96,7 +96,7 @@ impl<'gc> XmlObject<'gc> {
     ) -> XmlListObject<'gc> {
         let matched_children = if let E4XNodeKind::Element(elem) = &*self.0.node.get().kind() {
             let (children, attributes) = (&elem.children, &elem.attributes);
-            let search_children = if name.is_attribute() {
+            let search_children: &[E4XNode<'gc>] = if name.is_attribute() {
                 attributes
             } else {
                 children
