@@ -95,7 +95,7 @@ impl<'gc> XmlObject<'gc> {
         name: &Multiname<'gc>,
     ) -> XmlListObject<'gc> {
         let matched_children = if let E4XNodeKind::Element(elem) = &*self.0.node.get().kind() {
-            let (children, attributes) = (&elem.children, &elem.attributes);
+            let (children, attributes) = (&elem.children, elem.attributes());
             let search_children: &[E4XNode<'gc>] = if name.is_attribute() {
                 attributes
             } else {
@@ -584,7 +584,7 @@ impl<'gc> TObject<'gc> for XmlObject<'gc> {
                         return Ok(());
                     };
                     old_attr.set_parent(Some(self.node()), gc);
-                    elem.attributes.insert(index, old_attr);
+                    elem.attributes_mut().insert(index, old_attr);
                     old_value_copy
                 };
 
@@ -614,7 +614,7 @@ impl<'gc> TObject<'gc> for XmlObject<'gc> {
                     let E4XNodeKind::Element(elem) = &mut *node.kind_mut(gc) else {
                         return Ok(());
                     };
-                    elem.attributes.push(attr);
+                    elem.attributes_mut().push(attr);
                 }
 
                 self.trigger_notification(

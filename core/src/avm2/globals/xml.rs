@@ -524,7 +524,7 @@ pub fn remove_namespace<'gc>(
         let E4XNodeKind::Element(elem) = &*node.kind() else {
             unreachable!()
         };
-        let attributes = &elem.attributes;
+        let attributes = elem.attributes();
 
         // 5. For each a in x.[[Attributes]]
         for attr in attributes {

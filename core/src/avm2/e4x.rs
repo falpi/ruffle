@@ -273,7 +273,12 @@ pub enum E4XNodeKind<'gc> {
 #[derive(Collect, Debug, Default)]
 #[collect(no_drop)]
 pub struct E4XElementData<'gc> {
-    pub attributes: Vec<E4XNode<'gc>>,
+    /// Attributes. Lazily boxed (`None` when the element has none) for the
+    /// same reason as `namespaces`: most elements in data XML carry few or no
+    /// attributes, and an inline empty `Vec` would cost three pointers on
+    /// every element. Shrinks the element payload by another size class.
+    #[allow(clippy::box_collection)]
+    pub attributes: Option<Box<Vec<E4XNode<'gc>>>>,
     /// Child nodes, stored inline for the common single-child case
     /// (e.g. `<col>text</col>`, which dominates data XML) so that such
     /// elements need no separate heap allocation for their child list.
@@ -320,12 +325,41 @@ impl<'gc> E4XNodeContainer<'gc> for SmallVec<[E4XNode<'gc>; 1]> {
     }
 }
 
+impl<'gc> E4XNodeContainer<'gc> for Option<Box<Vec<E4XNode<'gc>>>> {
+    fn as_node_slice(&self) -> &[E4XNode<'gc>] {
+        self.as_deref().map_or(&[], |v| v.as_slice())
+    }
+
+    fn retain_nodes(&mut self, mut f: impl FnMut(E4XNode<'gc>) -> bool) {
+        if let Some(v) = self.as_deref_mut() {
+            v.retain(|node| f(*node));
+        }
+        // Collapse back to the allocation-free representation, mirroring
+        // `E4XChildren::shrink_repr`.
+        if self.as_deref().is_some_and(|v| v.is_empty()) {
+            *self = None;
+        }
+    }
+}
+
 impl<'gc> E4XElementData<'gc> {
+    /// The element's attributes as a slice (empty when it has none). Reads
+    /// should go through this rather than touching the lazily-boxed field.
+    pub fn attributes(&self) -> &[E4XNode<'gc>] {
+        self.attributes.as_node_slice()
+    }
+
     /// The element's in-scope namespace declarations as a slice (empty when
     /// it has none). Reads should go through this rather than touching the
     /// lazily-boxed field.
     pub fn namespaces(&self) -> &[E4XNamespace<'gc>] {
         self.namespaces.as_deref().map_or(&[], |v| v.as_slice())
+    }
+
+    /// The attribute list for mutation, materializing the lazily-boxed
+    /// storage on first use.
+    pub fn attributes_mut(&mut self) -> &mut Vec<E4XNode<'gc>> {
+        self.attributes.get_or_insert_with(Default::default)
     }
 
     /// The namespace-declaration list for mutation, materializing the
@@ -438,8 +472,8 @@ impl<'gc> E4XNode<'gc> {
             }
             (E4XNodeKind::Attribute(a), E4XNodeKind::Attribute(b)) => a == b,
             (E4XNodeKind::Element(a), E4XNodeKind::Element(b)) => {
-                let (children_a, attributes_a) = (&a.children, &a.attributes);
-                let (children_b, attributes_b) = (&b.children, &b.attributes);
+                let (children_a, attributes_a) = (&a.children, a.attributes());
+                let (children_b, attributes_b) = (&b.children, b.attributes());
                 if children_a.len() != children_b.len() || attributes_a.len() != attributes_b.len()
                 {
                     return false;
@@ -471,21 +505,24 @@ impl<'gc> E4XNode<'gc> {
                 E4XNodeKind::ProcessingInstruction(*string)
             }
             E4XNodeKind::Attribute(string) => E4XNodeKind::Attribute(*string),
-            E4XNodeKind::Element(elem) => E4XNodeKind::Element(Box::new(E4XElementData {
-                attributes: elem
-                    .attributes
+            E4XNodeKind::Element(elem) => {
+                let attributes: Vec<E4XNode<'gc>> = elem
+                    .attributes()
                     .iter()
                     .map(|attr| attr.deep_copy(mc))
-                    .collect(),
-                children: elem
-                    .children
-                    .iter()
-                    .map(|child| child.deep_copy(mc))
-                    .collect(),
-                // `filter` re-normalizes a stale `Some(empty)` back to the
-                // allocation-free `None`.
-                namespaces: elem.namespaces.clone().filter(|ns| !ns.is_empty()),
-            })),
+                    .collect();
+                E4XNodeKind::Element(Box::new(E4XElementData {
+                    attributes: (!attributes.is_empty()).then(|| Box::new(attributes)),
+                    children: elem
+                        .children
+                        .iter()
+                        .map(|child| child.deep_copy(mc))
+                        .collect(),
+                    // `filter` re-normalizes a stale `Some(empty)` back to the
+                    // allocation-free `None`, like the attributes above.
+                    namespaces: elem.namespaces.clone().filter(|ns| !ns.is_empty()),
+                }))
+            }
         };
 
         let node = E4XNode(Gc::new(
@@ -494,12 +531,13 @@ impl<'gc> E4XNode<'gc> {
         ));
 
         if let E4XNodeKind::Element(elem) = &mut *node.kind_mut(mc) {
-            let (attributes, children) = (&mut elem.attributes, &mut elem.children);
-            for attr in attributes.iter_mut() {
-                unlock!(Gc::write(mc, attr.0), E4XNodeData, parent).set(Some(node));
+            if let Some(attributes) = elem.attributes.as_deref_mut() {
+                for attr in attributes.iter_mut() {
+                    unlock!(Gc::write(mc, attr.0), E4XNodeData, parent).set(Some(node));
+                }
             }
 
-            for child in children.iter_mut() {
+            for child in elem.children.iter_mut() {
                 unlock!(Gc::write(mc, child.0), E4XNodeData, parent).set(Some(node));
             }
         }
@@ -605,7 +643,13 @@ impl<'gc> E4XNode<'gc> {
     pub fn remove_attribute(self, gc_context: &Mutation<'gc>, attribute: Self) {
         let mut this_kind = self.kind_mut(gc_context);
         if let E4XNodeKind::Element(elem) = &mut *this_kind {
-            elem.attributes.retain(|a| !Gc::ptr_eq(a.0, attribute.0));
+            if let Some(attributes) = elem.attributes.as_deref_mut() {
+                attributes.retain(|a| !Gc::ptr_eq(a.0, attribute.0));
+            }
+            // Collapse back to the allocation-free representation.
+            if elem.attributes.as_deref().is_some_and(|v| v.is_empty()) {
+                elem.attributes = None;
+            }
         }
         attribute.set_parent(None, gc_context);
     }
@@ -835,7 +879,7 @@ impl<'gc> E4XNode<'gc> {
 
             // 3. - 4.
             if let E4XNodeKind::Element(elem) = &*self.kind() {
-                let (children, attributes) = (&elem.children, &elem.attributes);
+                let (children, attributes) = (&elem.children, elem.attributes());
                 let search_children: &[E4XNode<'gc>] = if name.is_attribute() {
                     attributes
                 } else {
@@ -1345,7 +1389,11 @@ impl<'gc> E4XNode<'gc> {
                 namespace,
                 Some(name),
                 E4XNodeKind::Element(Box::new(E4XElementData {
-                    attributes: attribute_nodes,
+                    attributes: if attribute_nodes.is_empty() {
+                        None
+                    } else {
+                        Some(Box::new(attribute_nodes))
+                    },
                     children: SmallVec::new(),
                     namespaces: if namespaces.is_empty() {
                         None
@@ -1358,8 +1406,9 @@ impl<'gc> E4XNode<'gc> {
         ));
 
         let mut result_kind = result.kind_mut(activation.gc());
-        if let E4XNodeKind::Element(elem) = &mut *result_kind {
-            let attributes = &mut elem.attributes;
+        if let E4XNodeKind::Element(elem) = &mut *result_kind
+            && let Some(attributes) = elem.attributes.as_deref_mut()
+        {
             for attribute in attributes {
                 attribute.set_parent(Some(result), activation.gc());
             }
@@ -1570,8 +1619,9 @@ impl<'gc> E4XNode<'gc> {
         }
 
         // 2.g. For each attr in x.[[Attributes]]
-        if let E4XNodeKind::Element(elem) = &mut *self.kind_mut(gc) {
-            let attributes = &mut elem.attributes;
+        if let E4XNodeKind::Element(elem) = &mut *self.kind_mut(gc)
+            && let Some(attributes) = elem.attributes.as_deref_mut()
+        {
             for attr in attributes.iter_mut() {
                 // 2.g.i. If attr.[[Name]].[[Prefix]] == N.prefix, let attr.[[Name]].prefix = undefined
                 match attr.namespace() {
@@ -1629,7 +1679,7 @@ impl<'gc> E4XNode<'gc> {
 
     pub fn descendants(self, name: &Multiname<'gc>, out: &mut Vec<E4XOrXml<'gc>>) {
         if let E4XNodeKind::Element(elem) = &*self.kind() {
-            let (children, attributes) = (&elem.children, &elem.attributes);
+            let (children, attributes) = (&elem.children, elem.attributes());
             if name.is_attribute() {
                 for attribute in attributes {
                     if attribute.matches_name(name) {
@@ -1807,7 +1857,7 @@ fn to_xml_string_inner<'gc>(
             buf.push_utf8("]]>");
             return;
         }
-        E4XNodeKind::Element(elem) => (&elem.children, &elem.attributes),
+        E4XNodeKind::Element(elem) => (&elem.children, elem.attributes()),
     };
 
     // 9. Let namespaceDeclarations = { }
