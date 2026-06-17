@@ -24,6 +24,7 @@ use quick_xml::{
 };
 use ruffle_common::xml::avm2_unescape;
 use ruffle_macros::istr;
+use smallvec::SmallVec;
 
 use std::cell::{Ref, RefMut};
 use std::fmt::{self, Debug};
@@ -273,8 +274,42 @@ pub enum E4XNodeKind<'gc> {
 #[collect(no_drop)]
 pub struct E4XElementData<'gc> {
     pub attributes: Vec<E4XNode<'gc>>,
-    pub children: Vec<E4XNode<'gc>>,
+    /// Child nodes, stored inline for the common single-child case
+    /// (e.g. `<col>text</col>`, which dominates data XML) so that such
+    /// elements need no separate heap allocation for their child list.
+    /// Mirrors avmplus's `SINGLECHILDBIT` optimization; elements with two
+    /// or more children spill to the heap exactly like a `Vec`.
+    pub children: SmallVec<[E4XNode<'gc>; 1]>,
     pub namespaces: Vec<E4XNamespace<'gc>>,
+}
+
+/// Abstracts over the two node containers an element holds — `children`
+/// (a [`SmallVec`], specialized for the single-child case) and `attributes`
+/// (a [`Vec`]) — so the shared name-matching removal helper can operate on
+/// either without hand-duplicating its body.
+trait E4XNodeContainer<'gc> {
+    fn as_node_slice(&self) -> &[E4XNode<'gc>];
+    fn retain_nodes(&mut self, f: impl FnMut(E4XNode<'gc>) -> bool);
+}
+
+impl<'gc> E4XNodeContainer<'gc> for Vec<E4XNode<'gc>> {
+    fn as_node_slice(&self) -> &[E4XNode<'gc>] {
+        self.as_slice()
+    }
+
+    fn retain_nodes(&mut self, mut f: impl FnMut(E4XNode<'gc>) -> bool) {
+        self.retain(|node| f(*node));
+    }
+}
+
+impl<'gc> E4XNodeContainer<'gc> for SmallVec<[E4XNode<'gc>; 1]> {
+    fn as_node_slice(&self) -> &[E4XNode<'gc>] {
+        self.as_slice()
+    }
+
+    fn retain_nodes(&mut self, mut f: impl FnMut(E4XNode<'gc>) -> bool) {
+        self.retain(|node| f(*node));
+    }
 }
 
 impl<'gc> E4XNode<'gc> {
@@ -489,25 +524,23 @@ impl<'gc> E4XNode<'gc> {
     fn remove_matching_nodes(
         self,
         gc_context: &Mutation<'gc>,
-        nodes: &mut Vec<E4XNode<'gc>>,
+        nodes: &mut impl E4XNodeContainer<'gc>,
         name: &Multiname<'gc>,
     ) -> (Option<(usize, E4XNode<'gc>)>, Vec<E4XNode<'gc>>) {
-        let index = nodes
-            .iter()
-            .position(|x| name.is_any_name() || x.matches_name(name));
-
-        let val = if let Some(index) = index {
-            Some((index, nodes[index]))
-        } else {
-            None
+        let val = {
+            let slice = nodes.as_node_slice();
+            slice
+                .iter()
+                .position(|x| name.is_any_name() || x.matches_name(name))
+                .map(|index| (index, slice[index]))
         };
 
         let mut removed = Vec::new();
-        nodes.retain(|x| {
+        nodes.retain_nodes(|x| {
             if name.is_any_name() || x.matches_name(name) {
                 // Remove parent.
                 x.set_parent(None, gc_context);
-                removed.push(*x);
+                removed.push(x);
                 false
             } else {
                 true
@@ -776,7 +809,7 @@ impl<'gc> E4XNode<'gc> {
             // 3. - 4.
             if let E4XNodeKind::Element(elem) = &*self.kind() {
                 let (children, attributes) = (&elem.children, &elem.attributes);
-                let search_children = if name.is_attribute() {
+                let search_children: &[E4XNode<'gc>] = if name.is_attribute() {
                     attributes
                 } else {
                     children
@@ -1283,7 +1316,7 @@ impl<'gc> E4XNode<'gc> {
                 Some(name),
                 E4XNodeKind::Element(Box::new(E4XElementData {
                     attributes: attribute_nodes,
-                    children: Vec::new(),
+                    children: SmallVec::new(),
                     namespaces,
                 })),
                 activation.gc(),
