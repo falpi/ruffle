@@ -24,10 +24,10 @@ use quick_xml::{
 };
 use ruffle_common::xml::avm2_unescape;
 use ruffle_macros::istr;
-use smallvec::SmallVec;
 
 use std::cell::{Ref, RefMut};
 use std::fmt::{self, Debug};
+use std::ops::{Deref, DerefMut};
 
 mod is_xml_name;
 
@@ -279,12 +279,11 @@ pub struct E4XElementData<'gc> {
     /// every element. Shrinks the element payload by another size class.
     #[allow(clippy::box_collection)]
     pub attributes: Option<Box<Vec<E4XNode<'gc>>>>,
-    /// Child nodes, stored inline for the common single-child case
-    /// (e.g. `<col>text</col>`, which dominates data XML) so that such
-    /// elements need no separate heap allocation for their child list.
-    /// Mirrors avmplus's `SINGLECHILDBIT` optimization; elements with two
-    /// or more children spill to the heap exactly like a `Vec`.
-    pub children: SmallVec<[E4XNode<'gc>; 1]>,
+    /// Child nodes. See [`E4XChildren`]: the common single-child case
+    /// (`<col>text</col>`, which dominates data XML) is stored inline with no
+    /// heap allocation, and the field is one size class smaller than a
+    /// `SmallVec` would be.
+    pub children: E4XChildren<'gc>,
     /// In-scope namespace declarations. Boxed behind an `Option` because the
     /// overwhelming majority of elements (every non-root element in typical
     /// data XML) declare none, and an empty `Vec` would otherwise cost three
@@ -296,33 +295,190 @@ pub struct E4XElementData<'gc> {
     pub namespaces: Option<Box<Vec<E4XNamespace<'gc>>>>,
 }
 
-/// Abstracts over the two node containers an element holds — `children`
-/// (a [`SmallVec`], specialized for the single-child case) and `attributes`
-/// (a [`Vec`]) — so the shared name-matching removal helper can operate on
-/// either without hand-duplicating its body.
+/// Storage for an element's child nodes. The dominant single-child case
+/// (`<col>text</col>`, ubiquitous in data XML) is held inline in the `One`
+/// variant with no heap allocation — avmplus's `SINGLECHILDBIT` trick. The
+/// whole thing is a pointer plus a discriminant (8 bytes), one allocator
+/// size class smaller than a `SmallVec<[_; 1]>`, which shrinks every element.
+/// `Deref<Target = [E4XNode]>` provides the read API; mutation goes through
+/// the inherent `push`/`insert`/`remove`/`retain`/`clear` methods.
+#[derive(Collect, Debug, Default)]
+#[collect(no_drop)]
+pub enum E4XChildren<'gc> {
+    #[default]
+    Empty,
+    One(E4XNode<'gc>),
+    // `Box<Vec>` (rather than `Vec`) keeps the enum a single pointer wide; the
+    // extra indirection is only paid by the rarer multi-child elements.
+    #[allow(clippy::box_collection)]
+    Many(Box<Vec<E4XNode<'gc>>>),
+}
+
+impl<'gc> E4XChildren<'gc> {
+    /// Appends a child, promoting `Empty -> One -> Many` as needed.
+    pub fn push(&mut self, node: E4XNode<'gc>) {
+        match self {
+            E4XChildren::Empty => *self = E4XChildren::One(node),
+            E4XChildren::One(existing) => {
+                *self = E4XChildren::Many(Box::new(vec![*existing, node]));
+            }
+            E4XChildren::Many(vec) => vec.push(node),
+        }
+    }
+
+    /// Inserts a child at `index` (which must be `<= len`).
+    pub fn insert(&mut self, index: usize, node: E4XNode<'gc>) {
+        match self {
+            E4XChildren::Empty if index == 0 => *self = E4XChildren::One(node),
+            E4XChildren::One(existing) if index <= 1 => {
+                let mut vec = vec![*existing];
+                vec.insert(index, node);
+                *self = E4XChildren::Many(Box::new(vec));
+            }
+            E4XChildren::Many(vec) => vec.insert(index, node),
+            _ => panic!("E4XChildren::insert index out of bounds"),
+        }
+    }
+
+    /// Removes and returns the child at `index`, collapsing back toward the
+    /// inline representation afterwards.
+    pub fn remove(&mut self, index: usize) -> E4XNode<'gc> {
+        let removed = match self {
+            E4XChildren::One(node) if index == 0 => {
+                let node = *node;
+                *self = E4XChildren::Empty;
+                return node;
+            }
+            E4XChildren::Many(vec) => vec.remove(index),
+            _ => panic!("E4XChildren::remove index out of bounds"),
+        };
+        self.shrink_repr();
+        removed
+    }
+
+    /// Retains only the children for which `f` returns true.
+    pub fn retain(&mut self, mut f: impl FnMut(&E4XNode<'gc>) -> bool) {
+        match self {
+            E4XChildren::Empty => {}
+            E4XChildren::One(node) => {
+                if !f(node) {
+                    *self = E4XChildren::Empty;
+                }
+            }
+            E4XChildren::Many(vec) => vec.retain(|node| f(node)),
+        }
+        self.shrink_repr();
+    }
+
+    /// Removes all children.
+    pub fn clear(&mut self) {
+        *self = E4XChildren::Empty;
+    }
+
+    /// Collapses a `Many` whose length has dropped to 0 or 1 back into the
+    /// inline representation, preserving the single-child invariant across
+    /// removals.
+    fn shrink_repr(&mut self) {
+        if let E4XChildren::Many(vec) = self {
+            let collapsed = match vec.as_slice() {
+                [] => E4XChildren::Empty,
+                [only] => E4XChildren::One(*only),
+                _ => return,
+            };
+            *self = collapsed;
+        }
+    }
+}
+
+impl<'gc> Deref for E4XChildren<'gc> {
+    type Target = [E4XNode<'gc>];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            E4XChildren::Empty => &[],
+            E4XChildren::One(node) => std::slice::from_ref(node),
+            E4XChildren::Many(vec) => vec.as_slice(),
+        }
+    }
+}
+
+impl<'gc> DerefMut for E4XChildren<'gc> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            E4XChildren::Empty => &mut [],
+            E4XChildren::One(node) => std::slice::from_mut(node),
+            E4XChildren::Many(vec) => vec.as_mut_slice(),
+        }
+    }
+}
+
+impl<'a, 'gc> IntoIterator for &'a E4XChildren<'gc> {
+    type Item = &'a E4XNode<'gc>;
+    type IntoIter = std::slice::Iter<'a, E4XNode<'gc>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, 'gc> IntoIterator for &'a mut E4XChildren<'gc> {
+    type Item = &'a mut E4XNode<'gc>;
+    type IntoIter = std::slice::IterMut<'a, E4XNode<'gc>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
+impl<'gc> FromIterator<E4XNode<'gc>> for E4XChildren<'gc> {
+    fn from_iter<I: IntoIterator<Item = E4XNode<'gc>>>(iter: I) -> Self {
+        let mut iter = iter.into_iter();
+        match (iter.next(), iter.next()) {
+            (None, _) => E4XChildren::Empty,
+            (Some(first), None) => E4XChildren::One(first),
+            (Some(first), Some(second)) => {
+                let mut vec = Vec::with_capacity(2 + iter.size_hint().0);
+                vec.push(first);
+                vec.push(second);
+                vec.extend(iter);
+                E4XChildren::Many(Box::new(vec))
+            }
+        }
+    }
+}
+
+// These layouts are load-bearing: on the 32-bit wasm target an element's
+// payload must stay within a single 16-byte allocator size class (`children`
+// is a pointer + discriminant, `attributes`/`namespaces` one niche pointer
+// each). Guard against a field silently bumping it into the next class.
+#[cfg(target_pointer_width = "32")]
+const _: () = {
+    assert!(std::mem::size_of::<E4XChildren<'static>>() == 8);
+    assert!(std::mem::size_of::<E4XElementData<'static>>() == 16);
+};
+#[cfg(target_pointer_width = "64")]
+const _: () = {
+    assert!(std::mem::size_of::<E4XChildren<'static>>() == 16);
+    assert!(std::mem::size_of::<E4XElementData<'static>>() == 32);
+};
+
+impl<'gc> E4XNodeContainer<'gc> for E4XChildren<'gc> {
+    fn as_node_slice(&self) -> &[E4XNode<'gc>] {
+        self
+    }
+
+    fn retain_nodes(&mut self, mut f: impl FnMut(E4XNode<'gc>) -> bool) {
+        self.retain(|node| f(*node));
+    }
+}
+
+/// Abstracts over the node containers an element holds — `children`
+/// ([`E4XChildren`]) and `attributes` (a lazily-boxed `Vec`) — so the shared
+/// name-matching removal helper can operate on either without hand-duplicating
+/// its body.
 trait E4XNodeContainer<'gc> {
     fn as_node_slice(&self) -> &[E4XNode<'gc>];
     fn retain_nodes(&mut self, f: impl FnMut(E4XNode<'gc>) -> bool);
-}
-
-impl<'gc> E4XNodeContainer<'gc> for Vec<E4XNode<'gc>> {
-    fn as_node_slice(&self) -> &[E4XNode<'gc>] {
-        self.as_slice()
-    }
-
-    fn retain_nodes(&mut self, mut f: impl FnMut(E4XNode<'gc>) -> bool) {
-        self.retain(|node| f(*node));
-    }
-}
-
-impl<'gc> E4XNodeContainer<'gc> for SmallVec<[E4XNode<'gc>; 1]> {
-    fn as_node_slice(&self) -> &[E4XNode<'gc>] {
-        self.as_slice()
-    }
-
-    fn retain_nodes(&mut self, mut f: impl FnMut(E4XNode<'gc>) -> bool) {
-        self.retain(|node| f(*node));
-    }
 }
 
 impl<'gc> E4XNodeContainer<'gc> for Option<Box<Vec<E4XNode<'gc>>>> {
@@ -1394,7 +1550,7 @@ impl<'gc> E4XNode<'gc> {
                     } else {
                         Some(Box::new(attribute_nodes))
                     },
-                    children: SmallVec::new(),
+                    children: E4XChildren::Empty,
                     namespaces: if namespaces.is_empty() {
                         None
                     } else {
