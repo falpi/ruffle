@@ -1149,6 +1149,9 @@ impl<'gc> Class<'gc> {
     pub fn is_builtin_string(self) -> bool {
         matches!(self.0.builtin_type.get(), Some(BuiltinType::String))
     }
+    pub fn is_builtin_xml(self) -> bool {
+        matches!(self.0.builtin_type.get(), Some(BuiltinType::Xml))
+    }
     pub fn is_script_traits(self) -> bool {
         matches!(self.0.builtin_type.get(), Some(BuiltinType::ScriptTraits))
     }
@@ -1214,4 +1217,9 @@ pub enum BuiltinType {
 
     // Any script `global` class
     ScriptTraits,
+
+    // The builtin `XML` class. Not a primitive (added after the numeric/null
+    // tag-ordered variants on purpose) — used so the read-only XML type can
+    // masquerade as `XML` for AS3 `is`/`as`/coerce without subclassing it.
+    Xml,
 }

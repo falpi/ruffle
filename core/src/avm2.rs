@@ -51,6 +51,7 @@ mod class;
 mod domain;
 mod dynamic_map;
 mod e4x;
+mod e4x_read_only;
 pub mod error;
 pub mod error_messages;
 mod events;

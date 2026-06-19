@@ -76,6 +76,7 @@ mod worker_domain_object;
 mod worker_object;
 mod xml_list_object;
 mod xml_object;
+mod xml_object_read_only;
 
 pub use crate::avm2::object::array_object::{ArrayObject, ArrayObjectWeak, array_allocator};
 pub use crate::avm2::object::bitmapdata_object::{
@@ -182,12 +183,17 @@ pub use crate::avm2::object::xml_list_object::{
 pub use crate::avm2::object::xml_object::{
     NotificationCommand, XmlObject, XmlObjectWeak, xml_allocator,
 };
+pub use crate::avm2::object::xml_object_read_only::{
+    XmlObjectReadOnly, XmlObjectReadOnlyWeak, xml_read_only_allocator,
+};
 use crate::font::Font;
 
 /// Represents an object that can be directly interacted with by the AVM2
 /// runtime.
 #[enum_trait_object(
-    #[expect(clippy::enum_variant_names)]
+    // `XmlObjectReadOnly` doesn't share the `*Object` suffix, so the lint no
+    // longer fires across all variants; `allow` keeps it suppressed either way.
+    #[allow(clippy::enum_variant_names)]
     #[derive(Clone, Collect, Debug, Copy)]
     #[collect(no_drop)]
     pub enum Object<'gc> {
@@ -201,6 +207,7 @@ use crate::font::Font;
         DispatchObject(DispatchObject<'gc>),
         XmlObject(XmlObject<'gc>),
         XmlListObject(XmlListObject<'gc>),
+        XmlObjectReadOnly(XmlObjectReadOnly<'gc>),
         RegExpObject(RegExpObject<'gc>),
         ByteArrayObject(ByteArrayObject<'gc>),
         LoaderInfoObject(LoaderInfoObject<'gc>),
@@ -782,6 +789,7 @@ impl<'gc> Object<'gc> {
         pub fn as_error_object for ErrorObject;
         pub fn as_xml_object for XmlObject;
         pub fn as_xml_list_object for XmlListObject;
+        pub fn as_xml_object_read_only for XmlObjectReadOnly;
         pub fn as_context_3d for Context3DObject;
         pub fn as_index_buffer for IndexBuffer3DObject;
         pub fn as_vertex_buffer for VertexBuffer3DObject;
@@ -951,7 +959,8 @@ macro_rules! define_weak_enum {
 }
 
 define_weak_enum! {
-    #[expect(clippy::enum_variant_names)]
+    // See `Object`: `XmlObjectReadOnly` breaks the common `*Object` suffix.
+    #[allow(clippy::enum_variant_names)]
     #[derive(Clone, Collect, Debug, Copy)]
     #[collect(no_drop)]
     pub enum WeakObject<'gc> for Object<'gc> {
@@ -965,6 +974,7 @@ define_weak_enum! {
         DispatchObject(DispatchObjectWeak<'gc>),
         XmlObject(XmlObjectWeak<'gc>),
         XmlListObject(XmlListObjectWeak<'gc>),
+        XmlObjectReadOnly(XmlObjectReadOnlyWeak<'gc>),
         RegExpObject(RegExpObjectWeak<'gc>),
         ByteArrayObject(ByteArrayObjectWeak<'gc>),
         LoaderInfoObject(LoaderInfoObjectWeak<'gc>),
