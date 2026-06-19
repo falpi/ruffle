@@ -8,7 +8,7 @@ use crate::avm2::{
     error::make_error_1086,
     globals::methods::xml as xml_methods,
     multiname::Multiname,
-    object::{E4XOrXml, XmlListObject, XmlObject},
+    object::{E4XOrXml, XmlListObject, XmlObject, XmlObjectReadOnly},
     parameters::ParametersExt,
 };
 use crate::string::AvmString;
@@ -16,16 +16,16 @@ use crate::string::AvmString;
 fn has_complex_content_inner(children: &[E4XOrXml<'_>]) -> bool {
     match children {
         [] => false,
-        [child] => child.node().has_complex_content(),
-        _ => children.iter().any(|child| child.node().is_element()),
+        [child] => child.has_complex_content(),
+        _ => children.iter().any(|child| child.is_element()),
     }
 }
 
 fn has_simple_content_inner(children: &[E4XOrXml<'_>]) -> bool {
     match children {
         [] => true,
-        [child] => child.node().has_simple_content(),
-        _ => children.iter().all(|child| !child.node().is_element()),
+        [child] => child.has_simple_content(),
+        _ => children.iter().all(|child| !child.is_element()),
     }
 }
 
@@ -108,16 +108,32 @@ pub fn elements<'gc>(
     // 4. For i = 0 to list.[[Length]]-1
     let mut children = this.children_mut(activation.gc());
     for child in &mut *children {
-        // 4.a. If list[i].[[Class]] == "element"
-        if child.node().is_element() {
-            // 4.a.i. Let r = list[i].elements(name)
-            let r = child
-                .get_or_create_xml(activation)
-                .elements(&multiname, activation);
+        if let Some(node) = child.read_only_node() {
+            if node.is_element() {
+                let mut matched = Vec::new();
+                node.children_matching(&multiname, &mut matched);
+                if !matched.is_empty() {
+                    let r = XmlListObject::new_with_children(
+                        activation,
+                        matched.into_iter().map(E4XOrXml::ReadOnly).collect(),
+                        None,
+                        None,
+                    );
+                    list.append(r.into(), activation.gc());
+                }
+            }
+        } else {
+            // 4.a. If list[i].[[Class]] == "element"
+            if child.node().is_element() {
+                // 4.a.i. Let r = list[i].elements(name)
+                let r = child
+                    .get_or_create_xml(activation)
+                    .elements(&multiname, activation);
 
-            // 4.a.ii. If r.[[Length]] > 0, call the [[Append]] method of m with argument r
-            if r.length() > 0 {
-                list.append(r.into(), activation.gc());
+                // 4.a.ii. If r.[[Length]] > 0, call the [[Append]] method of m with argument r
+                if r.length() > 0 {
+                    list.append(r.into(), activation.gc());
+                }
             }
         }
     }
@@ -205,12 +221,26 @@ pub fn child<'gc>(
 
     // 2. For i = 0 to list.[[Length]]-1
     for child in &mut *children {
-        // 2.a. Let r = list[i].child(propertyName)
-        let child = child.get_or_create_xml(activation);
-        let r = child.child(&multiname, activation);
-        // 2.b. If r.[[Length]] > 0, call the [[Append]] method of m with argument r
-        if r.length() > 0 {
-            list.append(r.into(), activation.gc());
+        if let Some(node) = child.read_only_node() {
+            let mut matched = Vec::new();
+            node.children_matching(&multiname, &mut matched);
+            if !matched.is_empty() {
+                let r = XmlListObject::new_with_children(
+                    activation,
+                    matched.into_iter().map(E4XOrXml::ReadOnly).collect(),
+                    None,
+                    None,
+                );
+                list.append(r.into(), activation.gc());
+            }
+        } else {
+            // 2.a. Let r = list[i].child(propertyName)
+            let child = child.get_or_create_xml(activation);
+            let r = child.child(&multiname, activation);
+            // 2.b. If r.[[Length]] > 0, call the [[Append]] method of m with argument r
+            if r.length() > 0 {
+                list.append(r.into(), activation.gc());
+            }
         }
     }
 
@@ -226,9 +256,30 @@ pub fn children<'gc>(
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
     let list = this.as_xml_list_object().unwrap();
+    let children = list.children();
+    let mut sub_children = Vec::new();
+    for child in &*children {
+        if let Some(node) = child.read_only_node() {
+            if node.is_element() {
+                let mut all = Vec::new();
+                node.all_children(&mut all);
+                sub_children.extend(all.into_iter().map(E4XOrXml::ReadOnly));
+            }
+            continue;
+        }
 
-    // 1. Return the results of calling the [[Get]] method of list with argument "*"
-    list.get_property_local(&Multiname::any(), activation)
+        if let E4XNodeKind::Element(elem) = &*child.node().kind() {
+            sub_children.extend(elem.children.iter().map(|node| E4XOrXml::E4X(*node)));
+        }
+    }
+    // FIXME: This method should just call get_property_local with "*".
+    Ok(XmlListObject::new_with_children(
+        activation,
+        sub_children,
+        Some(list.into()),
+        Some(Multiname::any()),
+    )
+    .into())
 }
 
 /// 13.5.4.8 XMLList.prototype.contains (value)
@@ -246,8 +297,10 @@ pub fn contains<'gc>(
     // 1. For i = 0 to list.[[Length]]-1
     // NOTE: cannot use children_mut here since the value can be this same list, which causes a panic.
     for index in 0..length {
+        // Polyglot: child_as_value wraps mutable XML or read-only XMLReadOnly,
+        // and Value::abstract_eq handles both.
         let child = list
-            .xml_object_child(index, activation)
+            .child_as_value(index, activation)
             .expect("index should be in between 0 and length");
 
         // 2.a. If the result of the comparison list[i] == value is true, return true
@@ -283,8 +336,37 @@ pub fn attribute<'gc>(
     // 1. Let name = ToAttributeName(attributeName)
     let multiname = name_to_multiname(activation, args.get_value(0), true)?;
 
-    // 2. Return the result of calling the [[Get]] method of list with argument name
-    list.get_property_local(&multiname, activation)
+    let children = list.children();
+    let mut sub_children = Vec::new();
+    for child in &*children {
+        if let Some(node) = child.read_only_node() {
+            if node.is_element() {
+                let mut found = Vec::new();
+                node.attributes_matching(&multiname, &mut found);
+                sub_children.extend(found.into_iter().map(E4XOrXml::ReadOnly));
+            }
+            continue;
+        }
+
+        if let E4XNodeKind::Element(elem) = &*child.node().kind()
+            && let Some(found) = elem
+                .attributes()
+                .iter()
+                .find(|node| node.matches_name(&multiname))
+                .copied()
+        {
+            sub_children.push(E4XOrXml::E4X(found));
+        }
+    }
+
+    // FIXME: This should just use get_property_local with an attribute Multiname.
+    Ok(XmlListObject::new_with_children(
+        activation,
+        sub_children,
+        Some(list.into()),
+        Some(multiname),
+    )
+    .into())
 }
 
 // ECMA-357 13.5.4.3 XMLList.prototype.attributes ( )
@@ -296,8 +378,30 @@ pub fn attributes<'gc>(
     let this = this.as_object().unwrap();
     let list = this.as_xml_list_object().unwrap();
 
-    // 1. Return the result of calling the [[Get]] method of list with argument ToAttributeName("*")
-    list.get_property_local(&Multiname::any_attribute(), activation)
+    let mut child_attrs = Vec::new();
+    for child in list.children().iter() {
+        if let Some(node) = child.read_only_node() {
+            if node.is_element() {
+                let mut all = Vec::new();
+                node.all_attributes(&mut all);
+                child_attrs.extend(all.into_iter().map(E4XOrXml::ReadOnly));
+            }
+            continue;
+        }
+
+        if let E4XNodeKind::Element(elem) = &*child.node().kind() {
+            child_attrs.extend(elem.attributes().iter().map(|node| E4XOrXml::E4X(*node)));
+        }
+    }
+
+    // FIXME: This should just use get_property_local with an any attribute Multiname.
+    Ok(XmlListObject::new_with_children(
+        activation,
+        child_attrs,
+        Some(list.into()),
+        Some(Multiname::any_attribute()),
+    )
+    .into())
 }
 
 pub fn descendants<'gc>(
@@ -326,6 +430,15 @@ pub fn text<'gc>(
     let xml_list = this.as_xml_list_object().unwrap();
     let mut nodes = Vec::new();
     for child in xml_list.children().iter() {
+        if let Some(node) = child.read_only_node() {
+            if node.is_element() {
+                let mut t = Vec::new();
+                node.text_children(&mut t);
+                nodes.extend(t.into_iter().map(E4XOrXml::ReadOnly));
+            }
+            continue;
+        }
+
         if let E4XNodeKind::Element(elem) = &*child.node().kind() {
             nodes.extend(
                 elem.children
@@ -350,6 +463,13 @@ pub fn comments<'gc>(
     let xml_list = this.as_xml_list_object().unwrap();
     let mut nodes = Vec::new();
     for child in xml_list.children().iter() {
+        if let Some(node) = child.read_only_node() {
+            let mut ro = Vec::new();
+            node.comment_children(&mut ro);
+            nodes.extend(ro.into_iter().map(E4XOrXml::ReadOnly));
+            continue;
+        }
+
         if let E4XNodeKind::Element(elem) = &*child.node().kind() {
             nodes.extend(
                 elem.children
@@ -378,6 +498,23 @@ pub fn parent<'gc>(
     // 1. If list.[[Length]] = 0, return undefined
     if list.length() == 0 {
         return Ok(Value::Undefined);
+    }
+
+    // Read-only path: a read-only list is homogeneous, so check the first.
+    if let Some(first) = list.children()[0].read_only_node() {
+        let parent = first.parent();
+        for child in list.children().iter().skip(1) {
+            let other = child.read_only_node().and_then(|n| n.parent());
+            match (parent, other) {
+                (Some(a), Some(b)) if !a.same_node(&b) => return Ok(Value::Undefined),
+                (None, Some(_)) | (Some(_), None) => return Ok(Value::Undefined),
+                _ => {}
+            }
+        }
+        return Ok(match parent {
+            Some(p) => XmlObjectReadOnly::new(activation, p).into(),
+            None => Value::Undefined,
+        });
     }
 
     // 2. Let parent = list[0].[[Parent]]
@@ -413,8 +550,22 @@ pub fn processing_instructions<'gc>(
 
     let xml_list = this.as_xml_list_object().unwrap();
     let multiname = name_to_multiname(activation, args.get_value(0), false)?;
+    let ro_want = if multiname.is_any_name() {
+        None
+    } else {
+        multiname
+            .local_name()
+            .map(|s| s.to_utf8_lossy().into_owned())
+    };
     let mut nodes = Vec::new();
     for child in xml_list.children().iter() {
+        if let Some(node) = child.read_only_node() {
+            let mut ro = Vec::new();
+            node.pi_children(ro_want.as_deref(), &mut ro);
+            nodes.extend(ro.into_iter().map(E4XOrXml::ReadOnly));
+            continue;
+        }
+
         if let E4XNodeKind::Element(elem) = &*child.node().kind() {
             nodes.extend(
                 elem.children

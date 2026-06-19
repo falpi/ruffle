@@ -846,6 +846,12 @@ pub fn call_handler<'gc>(
         if let Some(xml) = obj.as_xml_object() {
             return Ok(xml.into());
         }
+        // Read-only XML masquerades as XML: return it as-is (identity-stable)
+        // rather than copying it into a fresh mutable XML, so callers like
+        // `UIDUtil.getUID` keep a stable object across calls.
+        if let Some(ro) = obj.as_xml_object_read_only() {
+            return Ok(ro.into());
+        }
         // This re-uses the XML object stored in the list
         if let Some(xml_list) = obj.as_xml_list_object() {
             if xml_list.length() == 1 {

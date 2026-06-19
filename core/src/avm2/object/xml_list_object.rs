@@ -2,7 +2,7 @@ use crate::avm2::activation::Activation;
 use crate::avm2::api_version::ApiVersion;
 use crate::avm2::e4x::{
     E4XNamespace, E4XNode, E4XNodeKind, handle_input_multiname, namespace_for_multiname,
-    string_to_multiname,
+    simple_content_to_string, string_to_multiname,
 };
 use crate::avm2::error::make_error_1089;
 use crate::avm2::function::FunctionArgs;
@@ -22,7 +22,9 @@ use ruffle_wstr::WString;
 use std::cell::{Cell, Ref, RefMut};
 use std::fmt::{self, Debug};
 
+use super::xml_object_read_only::XmlObjectReadOnly;
 use super::{ClassObject, NotificationCommand, XmlObject};
+use crate::avm2::e4x_read_only::E4XNodeReadOnly;
 
 /// A class instance allocator that allocates XMLList objects.
 pub fn xml_list_allocator<'gc>(
@@ -111,6 +113,19 @@ impl<'gc> XmlListObject<'gc> {
         }
     }
 
+    /// The n-th child wrapped as an AVM2 object value, polyglot over the
+    /// backing (mutable `XML` or read-only `XMLReadOnly`).
+    pub fn child_as_value(
+        self,
+        index: usize,
+        activation: &mut Activation<'_, 'gc>,
+    ) -> Option<Value<'gc>> {
+        let mut children = self.children_mut(activation.gc());
+        children
+            .get_mut(index)
+            .map(|c| c.as_object(activation).into())
+    }
+
     pub fn node_child(self, index: usize) -> Option<E4XNode<'gc>> {
         self.0.children.borrow().get(index).map(|x| x.node())
     }
@@ -158,7 +173,7 @@ impl<'gc> XmlListObject<'gc> {
             if i != 0 {
                 out.push_char('\n');
             }
-            out.push_str(child.node().xml_to_xml_string(activation).as_wstr())
+            out.push_str(child.xml_to_xml_string(activation).as_wstr())
         }
         AvmString::new(activation.gc(), out)
     }
@@ -238,6 +253,14 @@ impl<'gc> XmlListObject<'gc> {
         if let Some(xml) = value.as_object().and_then(|x| x.as_xml_object()) {
             self.0.target_dirty.set(true);
             children.push(E4XOrXml::Xml(xml));
+        }
+
+        // Read-only elements (e.g. the result of filtering an XMLReadOnly) are
+        // appended by reference into the shared arena — no materialisation.
+        if let Some(ro) = value.as_object().and_then(|x| x.as_xml_object_read_only())
+            && let Some(node) = ro.node()
+        {
+            children.push(E4XOrXml::ReadOnly(node));
         }
     }
 
@@ -326,12 +349,11 @@ impl<'gc> XmlListObject<'gc> {
             }
 
             for n in 0..self.length() {
-                let value = xml_list_obj.xml_object_child(n, activation).unwrap().into();
-                if !self
-                    .xml_object_child(n, activation)
-                    .unwrap()
-                    .abstract_eq(&value, activation)?
-                {
+                // Polyglot: works whether the element is mutable XML or a
+                // read-only XMLReadOnly (the latter has no E4XNode to wrap).
+                let value = xml_list_obj.child_as_value(n, activation).unwrap();
+                let self_value = self.child_as_value(n, activation).unwrap();
+                if !self_value.abstract_eq(&value, activation)? {
                     return Ok(false);
                 }
             }
@@ -340,6 +362,16 @@ impl<'gc> XmlListObject<'gc> {
         }
 
         if self.length() == 1 {
+            // Read-only single element: compare simple-content string values
+            // (E4X 11.5.1 for simple content). This is the `@attr == "literal"`
+            // path used by filter predicates.
+            if self.0.children.borrow()[0].read_only_node().is_some() {
+                let self_str =
+                    simple_content_to_string(self.0.children.borrow().iter().cloned(), activation);
+                let other_str = other.coerce_to_string(activation)?;
+                return Ok(self_str == other_str);
+            }
+
             return self
                 .xml_object_child(0, activation)
                 .unwrap()
@@ -370,18 +402,36 @@ pub struct XmlListObjectData<'gc> {
     target_dirty: Cell<bool>,
 }
 
-/// Holds either an `E4XNode` or an `XmlObject`. This can be converted
-/// in-place to an `XmlObject` via `get_or_create_xml`.
-/// This deliberately does not implement `Copy`, since `get_or_create_xml`
-/// takes `&mut self`
+/// Holds an `E4XNode` (mutable), an `XmlObject` (its cached wrapper), a
+/// read-only element handle, or its cached `XmlObjectReadOnly` wrapper. The
+/// cache upgrades — `E4X`→`Xml` and `ReadOnly`→`ReadOnlyXml` (both via
+/// `get_or_create_xml`/`as_object`) — give a *stable* AVM2 object per list
+/// entry, which Flex relies on for `itemToUID`/`===` (selection & rollover).
+/// Deliberately not `Copy`, since the upgrade takes `&mut self`.
 #[derive(Clone, Collect, Debug)]
 #[collect(no_drop)]
 pub enum E4XOrXml<'gc> {
     E4X(E4XNode<'gc>),
     Xml(XmlObject<'gc>),
+    /// A read-only element: a lightweight handle into a shared `E4XStoreReadOnly`
+    /// arena. Backs `XMLReadOnly` elements in an otherwise-polyglot `XMLList`.
+    ReadOnly(E4XNodeReadOnly<'gc>),
+    /// A read-only element already wrapped (cached) as an `XMLReadOnly` object,
+    /// for stable identity across repeated access.
+    ReadOnlyXml(XmlObjectReadOnly<'gc>),
 }
 
 impl<'gc> E4XOrXml<'gc> {
+    /// The read-only node handle, if this entry is read-only (either form).
+    /// Read paths branch on this instead of matching the concrete variant.
+    pub fn read_only_node(&self) -> Option<E4XNodeReadOnly<'gc>> {
+        match self {
+            E4XOrXml::ReadOnly(node) => Some(*node),
+            E4XOrXml::ReadOnlyXml(xml) => xml.node(),
+            _ => None,
+        }
+    }
+
     pub fn get_or_create_xml(&mut self, activation: &mut Activation<'_, 'gc>) -> XmlObject<'gc> {
         match self {
             E4XOrXml::E4X(node) => {
@@ -390,13 +440,86 @@ impl<'gc> E4XOrXml<'gc> {
                 xml
             }
             E4XOrXml::Xml(xml) => *xml,
+            E4XOrXml::ReadOnly(_) | E4XOrXml::ReadOnlyXml(_) => {
+                unreachable!("read-only element cannot become a mutable XmlObject; use as_object")
+            }
         }
+    }
+
+    /// Wrap this element into the appropriate AVM2 object, dispatching by
+    /// backing: mutable elements become `XML`, read-only ones `XMLReadOnly`.
+    /// The created object is cached on the entry so repeated calls return the
+    /// SAME object (stable identity — required by Flex selection/UID logic).
+    pub fn as_object(&mut self, activation: &mut Activation<'_, 'gc>) -> Object<'gc> {
+        match self {
+            E4XOrXml::ReadOnly(node) => {
+                let xml = XmlObjectReadOnly::new(activation, *node);
+                *self = E4XOrXml::ReadOnlyXml(xml);
+                xml.into()
+            }
+            E4XOrXml::ReadOnlyXml(xml) => (*xml).into(),
+            _ => self.get_or_create_xml(activation).into(),
+        }
+    }
+
+    pub fn is_element(&self) -> bool {
+        if let Some(node) = self.read_only_node() {
+            return node.is_element();
+        }
+        self.node().is_element()
+    }
+
+    pub fn has_simple_content(&self) -> bool {
+        if let Some(node) = self.read_only_node() {
+            return node.has_simple_content();
+        }
+        self.node().has_simple_content()
+    }
+
+    pub fn has_complex_content(&self) -> bool {
+        if let Some(node) = self.read_only_node() {
+            return node.has_complex_content();
+        }
+        self.node().has_complex_content()
+    }
+
+    /// Comments and PIs are skipped when building simple content. Read-only
+    /// trees don't currently carry comments/PIs, so this is always false there.
+    pub fn is_comment_or_pi(&self) -> bool {
+        if self.read_only_node().is_some() {
+            return false;
+        }
+        matches!(
+            &*self.node().kind(),
+            E4XNodeKind::Comment(_) | E4XNodeKind::ProcessingInstruction { .. }
+        )
+    }
+
+    /// The string used for this element when concatenating simple content.
+    pub fn xml_simple_string(&self, activation: &mut Activation<'_, 'gc>) -> AvmString<'gc> {
+        if let Some(node) = self.read_only_node() {
+            return AvmString::new_utf8(activation.gc(), node.string_value());
+        }
+        self.node().xml_to_string(activation)
+    }
+
+    /// Full XML serialisation of this element (for `toXMLString`).
+    pub fn xml_to_xml_string(&self, activation: &mut Activation<'_, 'gc>) -> AvmString<'gc> {
+        if let Some(node) = self.read_only_node() {
+            let mut s = String::new();
+            node.write_xml_string(&mut s);
+            return AvmString::new_utf8(activation.gc(), s);
+        }
+        self.node().xml_to_xml_string(activation)
     }
 
     pub fn node(&self) -> E4XNode<'gc> {
         match self {
             E4XOrXml::E4X(node) => *node,
             E4XOrXml::Xml(xml) => xml.node(),
+            E4XOrXml::ReadOnly(_) | E4XOrXml::ReadOnlyXml(_) => {
+                unreachable!("read-only element has no mutable E4XNode")
+            }
         }
     }
 }
@@ -488,7 +611,13 @@ impl<'gc> TObject<'gc> for XmlListObject<'gc> {
         let mut descendants = Vec::new();
 
         for child in self.0.children.borrow().iter() {
-            child.node().descendants(&multiname, &mut descendants);
+            if let Some(node) = child.read_only_node() {
+                let mut ro = Vec::new();
+                node.descendants_matching(&multiname, &mut ro);
+                descendants.extend(ro.into_iter().map(E4XOrXml::ReadOnly));
+            } else {
+                child.node().descendants(&multiname, &mut descendants);
+            }
         }
 
         // NOTE: The way avmplus implemented this means we do not need to set target_dirty flag.
@@ -516,7 +645,7 @@ impl<'gc> TObject<'gc> for XmlListObject<'gc> {
             && let Ok(index) = local_name.parse::<usize>()
         {
             if let Some(child) = children.get_mut(index) {
-                return Ok(Value::Object(child.get_or_create_xml(activation).into()));
+                return Ok(child.as_object(activation).into());
             } else {
                 return Ok(Value::Undefined);
             }
@@ -527,10 +656,10 @@ impl<'gc> TObject<'gc> for XmlListObject<'gc> {
 
         // 3. For i = 0 to x.[[Length]]-1,
         for child in children.iter_mut() {
-            let child = child.get_or_create_xml(activation);
-
             // 3.a. If x[i].[[Class]] == "element",
-            if child.node().is_element() {
+            if child.is_element() {
+                let child = child.as_object(activation);
+
                 // 3.a.i. Let gq be the result of calling the [[Get]] method of x[i] with argument P
                 let gq = child.get_property_local(name, activation)?;
 
@@ -616,8 +745,21 @@ impl<'gc> TObject<'gc> for XmlListObject<'gc> {
         // 2.a. If x[i].[[Class]] == "element" and the result of calling the [[HasProperty]] method of x[i] with argument P == true, return true
         // 3. Return false
         self.children().iter().any(|x| {
-            let node = x.node();
-            node.is_element() && node.has_property(name)
+            if let Some(node) = x.read_only_node() {
+                if !node.is_element() {
+                    return false;
+                }
+                let mut out = Vec::new();
+                if name.is_attribute() {
+                    node.attributes_matching(name, &mut out);
+                } else {
+                    node.children_matching(name, &mut out);
+                }
+                !out.is_empty()
+            } else {
+                let node = x.node();
+                node.is_element() && node.has_property(name)
+            }
         })
     }
 
@@ -644,6 +786,24 @@ impl<'gc> TObject<'gc> for XmlListObject<'gc> {
             && let Some(local_name) = name.local_name()
             && let Ok(mut index) = local_name.parse::<usize>()
         {
+            // Read-only fast path: the E4X filter operator builds its result
+            // via `result[i] = item` on a fresh, non-targeted XMLList. The
+            // mutation machinery below operates on `E4XNode` and cannot hold a
+            // read-only element (it would degrade it to a text node), so splice
+            // the element in by reference here.
+            if self.target_object().is_none()
+                && let Some(ro) = value.as_object().and_then(|v| v.as_xml_object_read_only())
+                && let Some(node) = ro.node()
+            {
+                let mut children = self.children_mut(activation.gc());
+                if index >= children.len() {
+                    children.push(E4XOrXml::ReadOnly(node));
+                } else {
+                    children[index] = E4XOrXml::ReadOnly(node);
+                }
+                return Ok(());
+            }
+
             self.reevaluate_target_object(activation);
 
             // 2.a. If x.[[TargetObject]] is not null
@@ -1096,7 +1256,7 @@ impl<'gc> TObject<'gc> for XmlListObject<'gc> {
                     children
                         .get_mut(index as usize)
                         .unwrap()
-                        .get_or_create_xml(activation)
+                        .as_object(activation)
                         .into()
                 })
                 .unwrap_or(Value::Undefined))

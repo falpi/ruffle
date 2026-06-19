@@ -993,7 +993,9 @@ impl<'gc> Value<'gc> {
                 if let Some(object) = self.as_object() {
                     // avmplus has a special case for XML and XMLList objects, so we need one as well
                     // https://github.com/adobe/avmplus/blob/858d034a3bd3a54d9b70909386435cf4aec81d21/core/Toplevel.cpp#L629-L634
-                    if (object.as_xml_object().is_some() || object.as_xml_list_object().is_some())
+                    if (object.as_xml_object().is_some()
+                        || object.as_xml_list_object().is_some()
+                        || object.as_xml_object_read_only().is_some())
                         && multiname.contains_public_namespace()
                     {
                         return object.get_property_local(multiname, activation);
@@ -1615,7 +1617,10 @@ impl<'gc> Value<'gc> {
         }
 
         if let Some(object) = self.as_object()
-            && object.is_of_type(class)
+            && (object.is_of_type(class)
+                // Read-only XML coerces to `XML` as-is (masquerade); see
+                // `Value::is_of_type`.
+                || (class.is_builtin_xml() && object.as_xml_object_read_only().is_some()))
         {
             return Ok(*self);
         }
@@ -1682,6 +1687,15 @@ impl<'gc> Value<'gc> {
         }
 
         if let Some(o) = self.as_object() {
+            // Read-only XML masquerades as the builtin `XML` for AS3
+            // `is`/`as`/coerce, so Flex SDK code that branches on `node is XML`
+            // takes the E4X path (method calls dispatch dynamically to the
+            // read-only impls). This is an AS3-level type-operator lie only: the
+            // Rust downcast `as_xml_object()` stays `None`, so Ruffle internals
+            // still distinguish read-only nodes (mutation, raw E4XNode access).
+            if type_class.is_builtin_xml() && o.as_xml_object_read_only().is_some() {
+                return true;
+            }
             o.is_of_type(type_class)
         } else {
             false
@@ -1801,6 +1815,18 @@ impl<'gc> Value<'gc> {
             {
                 return E4XNode::ptr_eq(xml1.node(), xml2.node());
             }
+            // Read-only XML: identity is the (arena, index) of the node, so two
+            // distinct wrappers of the same node are `===`.
+            if let Some(ro1) = self
+                .as_object()
+                .and_then(|obj| obj.as_xml_object_read_only())
+                && let Some(ro2) = other
+                    .as_object()
+                    .and_then(|obj| obj.as_xml_object_read_only())
+                && let (Some(n1), Some(n2)) = (ro1.node(), ro2.node())
+            {
+                return n1.same_node(&n2);
+            }
             false
         }
     }
@@ -1826,6 +1852,21 @@ impl<'gc> Value<'gc> {
 
             if let Some(xml_obj) = obj.as_xml_object() {
                 return xml_obj.abstract_eq(other, activation);
+            }
+
+            // Read-only XML. When both sides are read-only XML and either has
+            // complex content, compare structurally (E4X deep equality);
+            // otherwise fall back to simple-content (string) equality.
+            if let Some(ro) = obj.as_xml_object_read_only() {
+                if let Value::Object(o) = other
+                    && let Some(ro2) = o.as_xml_object_read_only()
+                    && let (Some(n1), Some(n2)) = (ro.node(), ro2.node())
+                    && (n1.has_complex_content() || n2.has_complex_content())
+                {
+                    return Ok(n1.deep_equals(&n2));
+                }
+                let other_str = other.coerce_to_string(activation)?;
+                return Ok(ro.to_string_value() == other_str.to_string());
             }
 
             if let Some(self_qname) = obj.as_qname_object()
@@ -1854,6 +1895,12 @@ impl<'gc> Value<'gc> {
 
             if let Some(xml_obj) = obj.as_xml_object() {
                 return xml_obj.abstract_eq(self, activation);
+            }
+
+            // Read-only XML: simple-content (string) equality.
+            if let Some(ro) = obj.as_xml_object_read_only() {
+                let self_str = self.coerce_to_string(activation)?;
+                return Ok(ro.to_string_value() == self_str.to_string());
             }
         }
 

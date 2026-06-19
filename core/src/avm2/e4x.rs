@@ -1915,13 +1915,10 @@ pub fn simple_content_to_string<'gc>(
 ) -> AvmString<'gc> {
     let mut out = istr!("");
     for child in children {
-        if matches!(
-            &*child.node().kind(),
-            E4XNodeKind::Comment(_) | E4XNodeKind::ProcessingInstruction { .. }
-        ) {
+        if child.is_comment_or_pi() {
             continue;
         }
-        let child_str = child.node().xml_to_string(activation);
+        let child_str = child.xml_simple_string(activation);
         out = AvmString::concat(activation.gc(), out, child_str);
     }
     out

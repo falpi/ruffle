@@ -2006,7 +2006,10 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let xml_list = self.avm2().class_defs().xml_list;
         let value = self.pop_stack().null_check(self, None)?;
 
-        if value.is_of_type(xml) || value.is_of_type(xml_list) {
+        // XMLReadOnly is a system class, so `is_of_type` covers it directly.
+        let xml_read_only = self.avm2().class_defs().xml_read_only;
+
+        if value.is_of_type(xml) || value.is_of_type(xml_list) || value.is_of_type(xml_read_only) {
             self.push_stack(value);
         } else {
             let class = value.instance_class(self);
@@ -2042,10 +2045,17 @@ impl<'a, 'gc> Activation<'a, 'gc> {
                 s,
             )),
             (Value::Object(value1), Value::Object(value2))
-                if (value1.as_xml_list_object().is_some() || value1.as_xml_object().is_some())
+                if (value1.as_xml_list_object().is_some()
+                    || value1.as_xml_object().is_some()
+                    || value1.as_xml_object_read_only().is_some())
                     && (value2.as_xml_list_object().is_some()
-                        || value2.as_xml_object().is_some()) =>
+                        || value2.as_xml_object().is_some()
+                        || value2.as_xml_object_read_only().is_some()) =>
             {
+                // XML/XMLList concatenation. Read-only XML is accepted too (it
+                // masquerades as XML at the AS3 level): `XMLListObject::append`
+                // has a read-only fast path, so e.g. `xl += roNode` — as used by
+                // `Menu.set dataProvider` — builds a proper XMLList.
                 let list = XmlListObject::new(self, None, None);
                 // NOTE: Use append here since that correctly sets target property/object.
                 list.append(value1.into(), self.gc());
