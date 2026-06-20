@@ -1074,6 +1074,45 @@ impl<'gc> E4XNodeReadOnly<'gc> {
         }
     }
 
+    /// Append the simple-content text of every child element matching `want`
+    /// into `out`, '\n'-separated for multiple matches (mirrors
+    /// `XMLList.toString`). Unlike `children_matching` + `string_value`, this
+    /// allocates no intermediate `Vec`/`XMLList` — the extraction fast path used
+    /// by the native sort.
+    pub fn append_children_text(&self, want: &Multiname<'gc>, out: &mut String) {
+        let mut c = self.record().first_child_idx();
+        let mut first = true;
+        while c != NO_NODE {
+            let cn = self.store.node(c);
+            if cn.kind() == E4XNodeKindReadOnly::Element && self.store.name_matches(c, want) {
+                if !first {
+                    out.push('\n');
+                }
+                self.with_index(c).append_text(out);
+                first = false;
+            }
+            c = cn.next_sibling;
+        }
+    }
+
+    /// As [`append_children_text`](Self::append_children_text) but over the
+    /// matching attributes.
+    pub fn append_attrs_text(&self, want: &Multiname<'gc>, out: &mut String) {
+        let mut a = self.record().first_attr;
+        let mut first = true;
+        while a != NO_NODE {
+            let an = self.store.node(a);
+            if self.store.name_matches(a, want) {
+                if !first {
+                    out.push('\n');
+                }
+                self.with_index(a).append_text(out);
+                first = false;
+            }
+            a = an.next_sibling;
+        }
+    }
+
     /// All descendant nodes matching `want` (depth-first). Includes attributes
     /// when `want` is an attribute multiname (E4X `..@foo`).
     pub fn descendants_matching(&self, want: &Multiname<'gc>, out: &mut Vec<E4XNodeReadOnly<'gc>>) {

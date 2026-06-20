@@ -2,6 +2,8 @@
 
 pub use crate::avm2::object::xml_read_only_allocator;
 
+use std::cmp::Ordering;
+
 use crate::avm2::e4x::{E4XNamespace, name_to_multiname};
 use crate::avm2::e4x_read_only::E4XNodeReadOnly;
 use crate::avm2::object::{E4XOrXml, QNameObject, XmlListObject};
@@ -367,6 +369,200 @@ pub fn copy<'gc>(
 ) -> Result<Value<'gc>, Error<'gc>> {
     // Read-only and immutable: a copy is indistinguishable from the original.
     Ok(this)
+}
+
+/// A pre-extracted sort key. Strings and numbers compare in O(1) with no AS3
+/// callback and no per-cell XMLList allocation.
+enum SortKey {
+    Str(String),
+    Num(f64),
+}
+
+/// Column kinds, kept in sync with the `KIND_*` constants in
+/// `com.terna.collections.KeyedSort`.
+const KIND_NUMERIC: i32 = 1;
+const KIND_LOWERCASE: i32 = 2;
+
+impl SortKey {
+    fn from_text(text: &str, kind: i32) -> Self {
+        match kind {
+            KIND_NUMERIC => SortKey::Num(text.trim().parse::<f64>().unwrap_or(f64::NAN)),
+            KIND_LOWERCASE => SortKey::Str(text.to_lowercase()),
+            _ => SortKey::Str(text.to_owned()),
+        }
+    }
+
+    fn cmp(&self, other: &SortKey) -> Ordering {
+        match (self, other) {
+            (SortKey::Str(a), SortKey::Str(b)) => a.cmp(b),
+            // Total order with NaN last (consistent across passes).
+            (SortKey::Num(a), SortKey::Num(b)) => match (a.is_nan(), b.is_nan()) {
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                _ => a.partial_cmp(b).unwrap(),
+            },
+            // Mixed kinds never occur (kind is per-column), but stay total.
+            (SortKey::Str(_), SortKey::Num(_)) => Ordering::Less,
+            (SortKey::Num(_), SortKey::Str(_)) => Ordering::Greater,
+        }
+    }
+}
+
+/// One sort column: how to read the key from a node, plus its kind and order.
+struct SortColumn<'gc> {
+    /// `None` => the node's own text; `Some` => a child element (or attribute)
+    /// multiname.
+    name: Option<Multiname<'gc>>,
+    is_attr: bool,
+    kind: i32,
+    descending: bool,
+}
+
+/// `XMLReadOnly.sortKeyed(items, fields, kinds, descending)` — static fast path
+/// for `KeyedSort` when the sorted rows are `XMLReadOnly`.
+///
+/// Extracts each column's key straight from the read-only arena (no XMLList
+/// wrappers), sorts an index permutation with the Rust stdlib sort (a pattern-
+/// defeating, adaptive sort — no quicksort blow-up on few-distinct columns, and
+/// near-linear on already-ordered input), and permutes `items` in place. The
+/// comparison runs entirely in Rust: no per-pair AS3 callback.
+///
+/// `fields[j]` selects the key: `""` = the node itself, `"@n"` = attribute `n`,
+/// `"n"` = child element `n`. `kinds[j]`: 0 string, 1 numeric, 2 lowercased
+/// string. Ties break on the original index (stable order).
+///
+/// Returns `true` once sorted; `false` if the rows aren't all `XMLReadOnly`, so
+/// the caller can fall back to its ActionScript path.
+pub fn sort_keyed<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    _this: Value<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, Error<'gc>> {
+    let items = args.get_object(activation, 0, "items")?;
+    let fields = args.get_object(activation, 1, "fields")?;
+    let kinds = args.get_object(activation, 2, "kinds")?;
+    let descending = args.get_object(activation, 3, "descending")?;
+
+    let Some(n) = items.as_array_storage().map(|s| s.length()) else {
+        return Ok(false.into());
+    };
+    if n <= 1 {
+        return Ok(true.into());
+    }
+
+    // Resolve the per-column specs once.
+    let k = match (
+        fields.as_array_storage().map(|s| s.length()),
+        kinds.as_array_storage().map(|s| s.length()),
+        descending.as_array_storage().map(|s| s.length()),
+    ) {
+        (Some(f), Some(ki), Some(d)) if f == ki && ki == d && f > 0 => f,
+        _ => return Ok(false.into()),
+    };
+
+    let mut columns: Vec<SortColumn<'gc>> = Vec::with_capacity(k);
+    for j in 0..k {
+        let field_val = fields
+            .as_array_storage()
+            .unwrap()
+            .get(j)
+            .unwrap_or(Value::Undefined);
+        let field_str = field_val.coerce_to_string(activation)?;
+        let kind = kinds
+            .as_array_storage()
+            .unwrap()
+            .get(j)
+            .unwrap_or(Value::Undefined)
+            .coerce_to_i32(activation)?;
+        let desc = descending
+            .as_array_storage()
+            .unwrap()
+            .get(j)
+            .unwrap_or(Value::Undefined)
+            .coerce_to_boolean();
+
+        let utf8 = field_str.to_utf8_lossy();
+        let (name, is_attr) = if utf8.is_empty() {
+            (None, false)
+        } else if let Some(attr) = utf8.strip_prefix('@') {
+            let attr = AvmString::new_utf8(activation.gc(), attr);
+            (
+                Some(name_to_multiname(activation, attr.into(), true)?),
+                true,
+            )
+        } else {
+            (
+                Some(name_to_multiname(activation, field_val, false)?),
+                false,
+            )
+        };
+
+        columns.push(SortColumn {
+            name,
+            is_attr,
+            kind,
+            descending: desc,
+        });
+    }
+
+    // Snapshot the nodes and bail (false) if any row isn't read-only XML.
+    let mut nodes: Vec<E4XNodeReadOnly<'gc>> = Vec::with_capacity(n);
+    let mut values: Vec<Value<'gc>> = Vec::with_capacity(n);
+    {
+        let storage = items.as_array_storage().unwrap();
+        for i in 0..n {
+            let v = storage.get(i).unwrap_or(Value::Undefined);
+            match v
+                .as_object()
+                .and_then(|o| o.as_xml_object_read_only())
+                .and_then(|ro| ro.node())
+            {
+                Some(node) => {
+                    nodes.push(node);
+                    values.push(v);
+                }
+                None => return Ok(false.into()),
+            }
+        }
+    }
+
+    // Extract a dense key matrix: keys[i * k + j].
+    let mut keys: Vec<SortKey> = Vec::with_capacity(n * k);
+    let mut buf = String::new();
+    for node in &nodes {
+        for col in &columns {
+            buf.clear();
+            match &col.name {
+                None => node.append_text(&mut buf),
+                Some(name) if col.is_attr => node.append_attrs_text(name, &mut buf),
+                Some(name) => node.append_children_text(name, &mut buf),
+            }
+            keys.push(SortKey::from_text(&buf, col.kind));
+        }
+    }
+
+    // Sort an index permutation; the final tie-break on the original index keeps
+    // the sort stable and keeps every composite key distinct.
+    let mut order: Vec<u32> = (0..n as u32).collect();
+    order.sort_unstable_by(|&a, &b| {
+        let (a, b) = (a as usize, b as usize);
+        for (j, col) in columns.iter().enumerate() {
+            let ord = keys[a * k + j].cmp(&keys[b * k + j]);
+            if ord != Ordering::Equal {
+                return if col.descending { ord.reverse() } else { ord };
+            }
+        }
+        a.cmp(&b)
+    });
+
+    // Permute the array in place.
+    let mut storage = items.as_array_storage_mut(activation.gc()).unwrap();
+    for (new_index, &old) in order.iter().enumerate() {
+        storage.set(new_index, values[old as usize]);
+    }
+
+    Ok(true.into())
 }
 
 /// `XMLReadOnly.contains(value)` — deep equality against `value` (E4X 13.4.4.8).
