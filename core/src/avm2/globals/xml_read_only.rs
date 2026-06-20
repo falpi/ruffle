@@ -3,6 +3,8 @@
 pub use crate::avm2::object::xml_read_only_allocator;
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 use crate::avm2::e4x::{E4XNamespace, name_to_multiname};
 use crate::avm2::e4x_read_only::E4XNodeReadOnly;
@@ -410,6 +412,44 @@ impl SortKey {
     }
 }
 
+// `SortKey` needs to be the key of a `HashMap` for the counting-sort fast path.
+// `f64` is not `Hash`/`Eq` by default; collapse all NaNs to a single canonical
+// representative so that `eq` stays consistent with `cmp` (both treat NaN==NaN).
+impl PartialEq for SortKey {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (SortKey::Str(a), SortKey::Str(b)) => a == b,
+            (SortKey::Num(a), SortKey::Num(b)) => match (a.is_nan(), b.is_nan()) {
+                (true, true) => true,
+                (false, false) => a.to_bits() == b.to_bits(),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+}
+impl Eq for SortKey {}
+impl Hash for SortKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            SortKey::Str(s) => {
+                0u8.hash(state);
+                s.hash(state);
+            }
+            SortKey::Num(n) => {
+                1u8.hash(state);
+                // Canonicalise NaN so equal keys hash identically.
+                let bits = if n.is_nan() {
+                    f64::NAN.to_bits()
+                } else {
+                    n.to_bits()
+                };
+                bits.hash(state);
+            }
+        }
+    }
+}
+
 /// One sort column: how to read the key from a node, plus its kind and order.
 struct SortColumn<'gc> {
     /// `None` => the node's own text; `Some` => a child element (or attribute)
@@ -543,19 +583,29 @@ pub fn sort_keyed<'gc>(
         }
     }
 
-    // Sort an index permutation; the final tie-break on the original index keeps
-    // the sort stable and keeps every composite key distinct.
-    let mut order: Vec<u32> = (0..n as u32).collect();
-    order.sort_unstable_by(|&a, &b| {
-        let (a, b) = (a as usize, b as usize);
-        for (j, col) in columns.iter().enumerate() {
-            let ord = keys[a * k + j].cmp(&keys[b * k + j]);
-            if ord != Ordering::Equal {
-                return if col.descending { ord.reverse() } else { ord };
-            }
-        }
-        a.cmp(&b)
-    });
+    // Fast path A: bail out if the rows are already in the requested order. A
+    // tie-break on the original index makes the composite comparator strictly
+    // monotonic (Less/Greater, never Equal), which protects against pdqsort
+    // degenerating on few-distinct columns — but it also disables the sort's
+    // "all equal" shortcut, so a single-column sort on a constant value still
+    // pays N·logN comparisons. Catching it here returns in O(N) instead.
+    if is_already_sorted(n, k, &columns, &keys) {
+        return Ok(true.into());
+    }
+
+    // Fast path B: counting sort when column 0 has few distinct values. Pays
+    // ~2·O(N) hash ops instead of O(N·logN) comparisons. The 64 cap keeps the
+    // high-variance case (every row distinct) on the original sort path with
+    // ~64 wasted hash insertions — well under a millisecond at 250k.
+    let order: Vec<u32> =
+        counting_sort_by_first_column(n, k, &columns, &keys).unwrap_or_else(|| {
+            // Fallback: comparison-based sort over an index permutation.
+            let mut order: Vec<u32> = (0..n as u32).collect();
+            order.sort_unstable_by(|&a, &b| {
+                compare_rows(a as usize, b as usize, k, &columns, &keys)
+            });
+            order
+        });
 
     // Permute the array in place.
     let mut storage = items.as_array_storage_mut(activation.gc()).unwrap();
@@ -564,6 +614,92 @@ pub fn sort_keyed<'gc>(
     }
 
     Ok(true.into())
+}
+
+/// Per-row comparator shared by the fallback sort and the inner-column passes
+/// of [`counting_sort_by_first_column`]. Walks the columns in order; ties break
+/// on the original index so the result is stable.
+fn compare_rows(
+    a: usize,
+    b: usize,
+    k: usize,
+    columns: &[SortColumn<'_>],
+    keys: &[SortKey],
+) -> Ordering {
+    for (j, col) in columns.iter().enumerate() {
+        let ord = keys[a * k + j].cmp(&keys[b * k + j]);
+        if ord != Ordering::Equal {
+            return if col.descending { ord.reverse() } else { ord };
+        }
+    }
+    a.cmp(&b)
+}
+
+/// Fast path A: scan in document order and stop as soon as any consecutive pair
+/// would violate the per-column ordering. The implicit tie-break on the
+/// original index is satisfied automatically (the row index strictly
+/// increases), so equal-key runs don't break the predicate.
+fn is_already_sorted(n: usize, k: usize, columns: &[SortColumn<'_>], keys: &[SortKey]) -> bool {
+    for i in 1..n {
+        for (j, col) in columns.iter().enumerate() {
+            let ord = keys[(i - 1) * k + j].cmp(&keys[i * k + j]);
+            let ord = if col.descending { ord.reverse() } else { ord };
+            match ord {
+                Ordering::Less => break,
+                Ordering::Greater => return false,
+                Ordering::Equal => {} // try next column
+            }
+        }
+    }
+    true
+}
+
+/// Fast path B: bucket the rows by their column-0 key. When the distinct count
+/// stays small (≤ `MAX_DISTINCT`), concatenate buckets in key order to obtain
+/// the final permutation in roughly 2·O(N). For multi-column sorts each bucket
+/// gets a final pass over the remaining columns; the per-bucket sort is cheap
+/// because the buckets are by definition smaller than `n`.
+///
+/// Returns `None` when there are too many distinct values (so the caller falls
+/// back to the comparison-based sort) — that branch keeps the everything-
+/// distinct workload as fast as before.
+fn counting_sort_by_first_column(
+    n: usize,
+    k: usize,
+    columns: &[SortColumn<'_>],
+    keys: &[SortKey],
+) -> Option<Vec<u32>> {
+    const MAX_DISTINCT: usize = 64;
+
+    let mut buckets: HashMap<&SortKey, Vec<u32>> = HashMap::new();
+    for i in 0..n {
+        // The bucket vector receives rows in increasing index order, which
+        // gives stability inside each bucket for free.
+        buckets.entry(&keys[i * k]).or_default().push(i as u32);
+        if buckets.len() > MAX_DISTINCT {
+            return None;
+        }
+    }
+
+    let desc0 = columns[0].descending;
+    let mut distinct: Vec<&SortKey> = buckets.keys().copied().collect();
+    distinct.sort_unstable_by(|a, b| {
+        let ord = a.cmp(b);
+        if desc0 { ord.reverse() } else { ord }
+    });
+
+    let multi_col = k > 1;
+    let mut order: Vec<u32> = Vec::with_capacity(n);
+    for key in &distinct {
+        let mut bucket = buckets.remove(key).unwrap();
+        // Only the remaining columns can break ties inside a single bucket.
+        if multi_col && bucket.len() > 1 {
+            bucket
+                .sort_unstable_by(|&a, &b| compare_rows(a as usize, b as usize, k, columns, keys));
+        }
+        order.extend(bucket);
+    }
+    Some(order)
 }
 
 /// `XMLReadOnly.contains(value)` — deep equality against `value` (E4X 13.4.4.8).
