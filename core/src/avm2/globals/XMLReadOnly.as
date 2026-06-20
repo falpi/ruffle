@@ -12,6 +12,15 @@ package {
 
         private native function init(value:*):void;
 
+        // Static fast path used by com.terna.collections.KeyedSort to sort an
+        // Array of XMLReadOnly rows entirely in Rust (key extraction + sort +
+        // in-place permutation), with no per-comparison ActionScript callback
+        // and no intermediate XMLList allocations. See `xml_read_only::sort_keyed`.
+        //   fields[j]:  ""=node itself, "@n"=attribute n, "n"=child element n
+        //   kinds[j]:   0=string, 1=numeric, 2=lowercased string
+        // Returns true when sorted; false if `items` aren't all XMLReadOnly.
+        public static native function sortKeyed(items:Array, fields:Array, kinds:Array, descending:Array):Boolean;
+
         AS3 native function toString():String;
         AS3 native function toXMLString():String;
         AS3 native function length():int;
