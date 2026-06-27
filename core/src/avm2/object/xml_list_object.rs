@@ -365,7 +365,15 @@ impl<'gc> XmlListObject<'gc> {
             // Read-only single element: compare simple-content string values
             // (E4X 11.5.1 for simple content). This is the `@attr == "literal"`
             // path used by filter predicates.
-            if self.0.children.borrow()[0].read_only_node().is_some() {
+            let ro_node = self.0.children.borrow()[0].read_only_node();
+            if let Some(node) = ro_node {
+                // Only stringify for simple content; a single complex-content
+                // element vs a non-XML value -> false WITHOUT serializing the
+                // subtree (avoids the `roList == null` memory spike, keeps RO
+                // consistent with mutable XML).
+                if !node.has_simple_content() {
+                    return Ok(false);
+                }
                 let self_str =
                     simple_content_to_string(self.0.children.borrow().iter().cloned(), activation);
                 let other_str = other.coerce_to_string(activation)?;

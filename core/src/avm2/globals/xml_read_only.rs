@@ -43,6 +43,101 @@ pub fn init<'gc>(
     Ok(Value::Undefined)
 }
 
+/// `XMLReadOnly.fromBinary(bytes)` — static fast path that builds the read-only
+/// arena straight from an **RESP** binary recordset with no XML-string
+/// reconstruction and no XML parse. `bytes` is the already-decompressed payload
+// (the AS3 caller inflates any deflate framing). Returns a fresh `XMLReadOnly`
+// rooted at the reconstructed SOAP envelope, so it is a drop-in for
+// `new XMLReadOnly(reconstructedEnvelope)`.
+pub fn from_binary<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    _this: Value<'gc>,
+    args: FunctionArgs<'_, 'gc>,
+) -> Result<Value<'gc>, Error<'gc>> {
+    use crate::avm2::e4x_read_only::E4XStoreReadOnly;
+    use crate::avm2::object::XmlObjectReadOnly;
+    use gc_arena::Gc;
+
+    let bytes_obj = args.get_object(activation, 0, "bytes")?;
+    let Some(storage) = bytes_obj.as_bytearray() else {
+        return Ok(Value::Null);
+    };
+
+    // Build the owned arena (no `Gc` inside) from the byte slice, then move it
+    // behind a single `Gc`. The `ByteArray` borrow ends before the allocation.
+    let store = E4XStoreReadOnly::from_binary(storage.bytes());
+    drop(storage);
+
+    let store = Gc::new(activation.gc(), store);
+    let Some(&root_idx) = store.roots().first() else {
+        return Ok(Value::Null);
+    };
+    let node = E4XNodeReadOnly::new(store, root_idx);
+    Ok(XmlObjectReadOnly::new(activation, node).into())
+}
+
+/// `XMLReadOnly.fromBinaryBegin()` — start a streaming RESP build, returning a
+/// fresh `XMLReadOnly` in build mode. Feed it raw response chunks with
+/// `fromBinaryFeed`, then finalise with `fromBinaryEnd`: the arena is populated
+/// incrementally (inflate + parse) as the chunks arrive, so the parse overlaps
+/// the download instead of running in one block at the end.
+pub fn from_binary_begin<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    _this: Value<'gc>,
+    _args: FunctionArgs<'_, 'gc>,
+) -> Result<Value<'gc>, Error<'gc>> {
+    use crate::avm2::object::XmlObjectReadOnly;
+    Ok(XmlObjectReadOnly::new_building(activation).into())
+}
+
+/// `XMLReadOnly.fromBinaryFeed(xro, bytes)` — append one raw response chunk
+/// (codec flag + possibly deflate-compressed RESP) to the in-progress build
+/// `xro` (the object returned by `fromBinaryBegin`). The chunk is copied out
+/// before the build mutates GC state.
+///
+/// **Static** (builder passed as an argument) because instance methods on
+/// `XMLReadOnly` are unreachable via a public access like `xro["fromBinaryFeed"]`:
+/// the E4X `get_property_local` reads that as child-element navigation, not a
+/// method (yielding an empty XMLList → "value is not a function").
+pub fn from_binary_feed<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    _this: Value<'gc>,
+    args: FunctionArgs<'_, 'gc>,
+) -> Result<Value<'gc>, Error<'gc>> {
+    let Some(ro) = args
+        .get_value(0)
+        .as_object()
+        .and_then(|o| o.as_xml_object_read_only())
+    else {
+        return Ok(Value::Undefined);
+    };
+    let bytes_obj = args.get_object(activation, 1, "bytes")?;
+    if let Some(storage) = bytes_obj.as_bytearray() {
+        let chunk = storage.bytes().to_vec();
+        drop(storage);
+        ro.feed_binary(&chunk, activation.gc());
+    }
+    Ok(Value::Undefined)
+}
+
+/// `XMLReadOnly.fromBinaryEnd(xro)` — finalise the streaming build `xro`,
+/// freezing the arena and pointing it at the reconstructed SOAP envelope root.
+/// **Static** (see `from_binary_feed`): the builder is passed as an argument.
+pub fn from_binary_end<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    _this: Value<'gc>,
+    args: FunctionArgs<'_, 'gc>,
+) -> Result<Value<'gc>, Error<'gc>> {
+    if let Some(ro) = args
+        .get_value(0)
+        .as_object()
+        .and_then(|o| o.as_xml_object_read_only())
+    {
+        ro.finish_binary(activation);
+    }
+    Ok(Value::Undefined)
+}
+
 pub fn to_string<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,

@@ -1865,6 +1865,17 @@ impl<'gc> Value<'gc> {
                 {
                     return Ok(n1.deep_equals(&n2));
                 }
+                // E4X 11.5.1 step 4: only the simple-content string comparison.
+                // A complex-content node vs a non-read-only value (null/undefined/
+                // string) can never match via simple content -> return false
+                // WITHOUT serializing the subtree. Mirrors `XmlObject::abstract_eq`
+                // and avoids a memory spike on `roComplexNode == null` (so app code
+                // no longer needs the `===`/`!==` workaround).
+                if let Some(node) = ro.node()
+                    && !node.has_simple_content()
+                {
+                    return Ok(false);
+                }
                 let other_str = other.coerce_to_string(activation)?;
                 return Ok(ro.to_string_value() == other_str.to_string());
             }

@@ -1,4 +1,6 @@
 package {
+    import flash.utils.ByteArray;
+
     // Read-only, immutable parallel to XML. Parsed once into a compact arena;
     // supports E4X read syntax (`.child`, `..desc`, `@attr`, `for each`, `.()`)
     // via native dispatch, but cannot be mutated and emits no change
@@ -20,6 +22,28 @@ package {
         //   kinds[j]:   0=string, 1=numeric, 2=lowercased string
         // Returns true when sorted; false if `items` aren't all XMLReadOnly.
         public static native function sortKeyed(items:Array, fields:Array, kinds:Array, descending:Array):Boolean;
+
+        // Static fast path: build an XMLReadOnly straight from an RESP binary
+        // recordset - no XML string reconstruction, no XML parse; the arena 
+        // is populated directly in Rust. `bytes` is the already-decompressed 
+        // payload. Drop-in for `new XMLReadOnly(reconstructedEnvelope)`. 
+        // See `xml_read_only::from_binary`.
+        public static native function fromBinary(bytes:ByteArray):XMLReadOnly;
+
+        // Streaming counterpart of fromBinary: build the XMLReadOnly arena
+        // incrementally from the raw RESP response as chunks arrive (URLStream),
+        // so the parse overlaps the download instead of running in one block at
+        // the end. `fromBinaryBegin` returns an XMLReadOnly in build mode; feed
+        // it raw chunks (codec flag + possibly deflate-compressed bytes) via
+        // `fromBinaryFeed`; `fromBinaryEnd` freezes the arena and points the
+        // object at the envelope root. See `xml_read_only::from_binary_begin`.
+        //
+        // Feed/End are STATIC (taking the builder as the first argument) because
+        // a public instance access `xro["fromBinaryFeed"]` is intercepted by the
+        // E4X get_property_local as child-element navigation, not a method call.
+        public static native function fromBinaryBegin():XMLReadOnly;
+        public static native function fromBinaryFeed(xro:XMLReadOnly, bytes:ByteArray):void;
+        public static native function fromBinaryEnd(xro:XMLReadOnly):void;
 
         AS3 native function toString():String;
         AS3 native function toXMLString():String;
@@ -46,8 +70,8 @@ package {
         AS3 native function contains(value:*):Boolean;
         AS3 native function childIndex():int;
 
-        AS3 function toJSON(k:String):* {
-            return this.toJSON(k);
+        AS3 function toJSON(k:String = null):* {
+            return this.AS3::toString();
         }
 
         // Read-only XML reports `is XML` true (Ruffle masquerade), so Flex SDK

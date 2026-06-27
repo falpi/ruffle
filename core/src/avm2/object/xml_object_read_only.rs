@@ -9,12 +9,12 @@
 use core::fmt;
 
 use gc_arena::barrier::unlock;
-use gc_arena::lock::Lock;
+use gc_arena::lock::{Lock, RefLock};
 use gc_arena::{Collect, Gc, GcWeak};
 use ruffle_common::utils::HasPrefixField;
 
 use crate::avm2::e4x::string_to_multiname;
-use crate::avm2::e4x_read_only::{E4XNodeReadOnly, E4XStoreReadOnly};
+use crate::avm2::e4x_read_only::{E4XNodeReadOnly, E4XStoreReadOnly, RespStreamBuilder};
 use crate::avm2::object::script_object::ScriptObjectData;
 use crate::avm2::object::xml_list_object::E4XOrXml;
 use crate::avm2::object::{ClassObject, FunctionObject, Object, TObject, XmlListObject};
@@ -35,6 +35,7 @@ pub fn xml_read_only_allocator<'gc>(
             base: ScriptObjectData::new(class),
             node: Lock::new(None),
             notification: Lock::new(None),
+            build: RefLock::new(None),
         },
     ))
     .into())
@@ -56,7 +57,7 @@ impl fmt::Debug for XmlObjectReadOnly<'_> {
     }
 }
 
-#[derive(Clone, Collect, HasPrefixField)]
+#[derive(Collect, HasPrefixField)]
 #[collect(no_drop)]
 #[repr(C, align(8))]
 pub struct XmlObjectReadOnlyData<'gc> {
@@ -71,6 +72,11 @@ pub struct XmlObjectReadOnlyData<'gc> {
     /// UID onto this function for XML-typed items — so we store it (the wrapper
     /// object is identity-stable, so the UID stays stable across calls).
     notification: Lock<Option<FunctionObject<'gc>>>,
+
+    /// In-progress streaming RESP build (`fromBinaryBegin`/`Feed`/`End`), or
+    /// `None` for a normal node-backed object. Boxed so an idle (non-building)
+    /// object pays only one null pointer.
+    build: RefLock<Option<Box<RespStreamBuilder>>>,
 }
 
 impl<'gc> XmlObjectReadOnly<'gc> {
@@ -83,6 +89,7 @@ impl<'gc> XmlObjectReadOnly<'gc> {
                 base: ScriptObjectData::new(class),
                 node: Lock::new(Some(node)),
                 notification: Lock::new(None),
+                build: RefLock::new(None),
             },
         ))
     }
@@ -122,6 +129,53 @@ impl<'gc> XmlObjectReadOnly<'gc> {
             .first()
             .map(|&idx| E4XNodeReadOnly::new(store, idx));
 
+        unlock!(Gc::write(mc, self.0), XmlObjectReadOnlyData, node).set(root);
+    }
+
+    /// Create an `XMLReadOnly` in streaming-build mode: it carries an
+    /// [`RespStreamBuilder`] and has no node yet. `fromBinaryFeed` appends raw
+    /// response chunks; `fromBinaryEnd` freezes the arena and points the object
+    /// at the reconstructed envelope root.
+    pub fn new_building(activation: &mut Activation<'_, 'gc>) -> Self {
+        let class = activation.avm2().classes().xml_read_only;
+        XmlObjectReadOnly(Gc::new(
+            activation.gc(),
+            XmlObjectReadOnlyData {
+                base: ScriptObjectData::new(class),
+                node: Lock::new(None),
+                notification: Lock::new(None),
+                build: RefLock::new(Some(Box::new(RespStreamBuilder::new()))),
+            },
+        ))
+    }
+
+    /// Append a raw response chunk to the in-progress streaming build (codec
+    /// flag + possibly deflate-compressed RESP; inflated and row-parsed in
+    /// Rust). No-op once finalised or if the object isn't in build mode.
+    pub fn feed_binary(self, bytes: &[u8], mc: &gc_arena::Mutation<'gc>) {
+        if let Some(builder) = unlock!(Gc::write(mc, self.0), XmlObjectReadOnlyData, build)
+            .borrow_mut()
+            .as_mut()
+        {
+            builder.feed(bytes);
+        }
+    }
+
+    /// Finalise the streaming build: freeze the arena and point this object at
+    /// the reconstructed SOAP envelope root. No-op if not in build mode.
+    pub fn finish_binary(self, activation: &mut Activation<'_, 'gc>) {
+        let mc = activation.gc();
+        let builder = unlock!(Gc::write(mc, self.0), XmlObjectReadOnlyData, build)
+            .borrow_mut()
+            .take();
+        let Some(builder) = builder else {
+            return;
+        };
+        let store = Gc::new(mc, builder.finish());
+        let root = store
+            .roots()
+            .first()
+            .map(|&idx| E4XNodeReadOnly::new(store, idx));
         unlock!(Gc::write(mc, self.0), XmlObjectReadOnlyData, node).set(root);
     }
 
