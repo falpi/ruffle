@@ -56,6 +56,7 @@
 
 use std::collections::HashMap;
 
+use flate2::{Decompress, FlushDecompress, Status};
 use gc_arena::{Collect, Gc, Mutation};
 use quick_xml::NsReader;
 use quick_xml::events::Event;
@@ -358,29 +359,63 @@ impl StrArena {
         self.cur_off += need;
         ((chunk_idx as u32) << STR_CHUNK_SHIFT) | (local as u32)
     }
+
+    /// Read back a previously [`append`](Self::append)ed entry's bytes by its
+    /// `u32` ref — lets interning compare a candidate against the stored content
+    /// without keeping a separate copy of the string.
+    fn get(&self, sref: u32) -> &[u8] {
+        let chunk = (sref >> STR_CHUNK_SHIFT) as usize;
+        let local = (sref & STR_CHUNK_MASK) as usize;
+        let buf = &self.chunks[chunk];
+        let len = u32::from_le_bytes(buf[local..local + 4].try_into().unwrap()) as usize;
+        &buf[local + 4..local + 4 + len]
+    }
 }
 
 /// Mutable scratch shared by the parser helpers.
 struct Builder {
     nodes: NodeArena,
     strings: StrArena,
-    /// Content → string ref, for deduplicating repeated strings. Transient:
-    /// dropped when the `Builder` does, so it never weighs on the final store.
-    intern: HashMap<String, u32>,
+    /// Content-hash → string ref, for deduplicating repeated strings. Keyed by a
+    /// 64-bit content hash rather than an owned `String`, so the dedup index does
+    /// NOT duplicate every unique string's bytes + 24-byte `String` header on top
+    /// of the packed string arena — that duplication was a large transient peak
+    /// on builds with high-cardinality columns. Transient: dropped with the
+    /// `Builder`, so it never weighs on the final store.
+    intern: HashMap<u64, u32>,
     decls: Vec<NsDeclReadOnly>,
 }
 
 impl Builder {
     /// Intern `s`: return the ref of its (deduplicated) entry, bump-appending it
-    /// the first time it is seen.
+    /// the first time it is seen. The dedup index is keyed by a 64-bit content
+    /// hash; on a (vanishingly rare) hash collision with *different* content the
+    /// new string is simply appended without deduping — correctness holds (the
+    /// previous ref stays valid in the arena), only that one dedup is skipped.
     fn intern(&mut self, s: &str) -> u32 {
-        if let Some(&r) = self.intern.get(s) {
+        let h = hash_bytes(s.as_bytes());
+        if let Some(&r) = self.intern.get(&h)
+            && self.strings.get(r) == s.as_bytes()
+        {
             return r;
         }
         let r = self.strings.append(s);
-        self.intern.insert(s.to_string(), r);
+        self.intern.insert(h, r);
         r
     }
+}
+
+/// FNV-1a 64-bit hash of `bytes` — keys the string-interning index by content
+/// without storing the content twice. Fast on the short strings that dominate
+/// (element/attribute names, cell values); at 64 bits, collisions between
+/// distinct contents are astronomically rare.
+fn hash_bytes(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
 }
 
 impl E4XStoreReadOnly {
@@ -650,6 +685,31 @@ impl E4XStoreReadOnly {
             decls,
             roots: roots.into_boxed_slice(),
         }
+    }
+
+    /// Build the arena directly from an **RESP** binary recordset,
+    /// skipping XML-string reconstruction and the XML parser entirely.
+    ///
+    /// Produces the same tree [`parse`](Self::parse) would build for the
+    /// reconstructed SOAP envelope:
+    /// `Envelope > Body > <rootQName> > <rowElement>*`, where each row is a
+    /// sequence of `<column>value</column>` leaves (the value folds inline via
+    /// the single-child-text collapse, exactly as `<tag>value</tag>` does). A
+    /// `0xFF` fault marker instead appends `Body > Fault > {faultcode,
+    /// faultstring}`, so the caller's `body.*::Fault` check fires.
+    ///
+    /// `bytes` is the already-*decompressed* RESP with no leading codec flag
+    /// (the one-shot caller inflates any deflate framing). Values are stored as
+    /// their raw, unescaped text — no XML escape/unescape round-trip. Malformed
+    /// or truncated input stops the build tolerantly, mirroring `parse`.
+    ///
+    /// This one-shot entry point is just [`RespStreamBuilder`] fed the whole
+    /// payload at once (`new_decompressed`), so a single RESP parser is shared
+    /// with the streaming path.
+    pub fn from_binary(bytes: &[u8]) -> Self {
+        let mut builder = RespStreamBuilder::new_decompressed();
+        builder.feed(bytes);
+        builder.finish()
     }
 
     pub fn roots(&self) -> &[u32] {
@@ -947,6 +1007,591 @@ fn attach_child(
         }
         *top_last = id;
         roots.push(id);
+    }
+}
+
+/// A freshly-built element record (no children/value/attributes yet). Shared by
+/// the RESP builder ([`E4XStoreReadOnly::from_binary`]).
+fn elem_record(name: u32, ns: u32, prefix: u32, parent: u32) -> E4XNodeDataReadOnly {
+    E4XNodeDataReadOnly {
+        kind_parent: pack_kind_parent(E4XNodeKindReadOnly::Element, parent),
+        name,
+        value_or_child: NO_NODE,
+        ns,
+        prefix,
+        next_sibling: NO_NODE,
+        first_attr: NO_NODE,
+    }
+}
+
+/// Consume a finished [`Builder`] into the immutable store, shrinking only the
+/// small outer pointer vecs (the data extents are never copied). Used by
+/// [`E4XStoreReadOnly::from_binary`].
+fn finish_store(b: Builder, roots: Vec<u32>) -> E4XStoreReadOnly {
+    let Builder {
+        nodes,
+        strings,
+        decls,
+        intern: _,
+    } = b;
+    let NodeArena {
+        chunks: mut node_chunks,
+        len: node_count,
+    } = nodes;
+    let StrArena {
+        chunks: mut str_chunks,
+        ..
+    } = strings;
+    let mut decls = decls;
+    node_chunks.shrink_to_fit();
+    str_chunks.shrink_to_fit();
+    decls.shrink_to_fit();
+    E4XStoreReadOnly {
+        node_chunks,
+        node_count,
+        str_chunks,
+        decls,
+        roots: roots.into_boxed_slice(),
+    }
+}
+
+/// Append `<SOAP-ENV:Fault><faultcode>…</faultcode><faultstring>msg</faultstring>
+/// </Fault>` as the sibling of the (possibly partial) response root under Body,
+/// so the consumer's `body.*::Fault` check fires on a mid-stream fault.
+fn append_fault(
+    b: &mut Builder,
+    body_idx: u32,
+    root_idx: u32,
+    soap_uri: u32,
+    soap_prefix: u32,
+    msg: &str,
+) {
+    let fault_name = b.intern("Fault");
+    let fc_name = b.intern("faultcode");
+    let fc_val = b.intern("SOAP-ENV:Server");
+    let fs_name = b.intern("faultstring");
+    let fs_val = b.intern(msg);
+
+    let fault_idx = b
+        .nodes
+        .push(elem_record(fault_name, soap_uri, soap_prefix, body_idx));
+    b.nodes.at_mut(root_idx).next_sibling = fault_idx;
+
+    let fc_idx = b
+        .nodes
+        .push(elem_record(fc_name, NO_NODE, NO_NODE, fault_idx));
+    b.nodes.at_mut(fc_idx).set_value(fc_val);
+    b.nodes.at_mut(fault_idx).set_first_child(fc_idx);
+
+    let fs_idx = b
+        .nodes
+        .push(elem_record(fs_name, NO_NODE, NO_NODE, fault_idx));
+    b.nodes.at_mut(fs_idx).set_value(fs_val);
+    b.nodes.at_mut(fc_idx).next_sibling = fs_idx;
+}
+
+/// Minimal bounds-checked cursor over an RESP binary recordset, used by
+/// [`E4XStoreReadOnly::from_binary`]. Reads past the end return `None`, so a
+/// truncated stream stops the build tolerantly.
+struct RespCursor<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> RespCursor<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data, pos: 0 }
+    }
+
+    fn u8(&mut self) -> Option<u8> {
+        let v = *self.data.get(self.pos)?;
+        self.pos += 1;
+        Some(v)
+    }
+
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        let end = self.pos.checked_add(n)?;
+        let s = self.data.get(self.pos..end)?;
+        self.pos = end;
+        Some(s)
+    }
+
+    /// Unsigned LEB128 varint.
+    fn varint(&mut self) -> Option<usize> {
+        let mut result: u64 = 0;
+        let mut shift: u32 = 0;
+        loop {
+            let byte = self.u8()?;
+            result |= u64::from(byte & 0x7F) << shift;
+            if byte & 0x80 == 0 {
+                break;
+            }
+            shift += 7;
+            if shift >= 64 {
+                return None;
+            }
+        }
+        Some(result as usize)
+    }
+
+    /// Length-prefixed byte string (`varint len` + `len` bytes).
+    fn lp_bytes(&mut self) -> Option<&'a [u8]> {
+        let len = self.varint()?;
+        self.take(len)
+    }
+
+    /// Length-prefixed UTF-8 string (lossy on invalid UTF-8).
+    fn lp_string(&mut self) -> Option<String> {
+        self.lp_bytes()
+            .map(|s| String::from_utf8_lossy(s).into_owned())
+    }
+}
+
+/// Streaming builder for the RESP wire format. It accepts the **raw** response
+/// bytes a chunk at a time — a leading 1-byte codec flag (`0` raw / `1` deflate)
+/// then a possibly deflate-compressed RESP stream — inflates incrementally in
+/// Rust, and appends every *complete* row to the arena as soon as its bytes are
+/// available. The parse therefore overlaps the network/server streaming instead
+/// of running in one block after the full download.
+///
+/// It is the single RESP parser: the one-shot [`E4XStoreReadOnly::from_binary`]
+/// is this builder in "already-decompressed" mode ([`new_decompressed`](
+/// Self::new_decompressed)) fed the whole payload at once.
+///
+/// Holds no `Gc` pointers (owned arenas + a flate2 decoder), so it is a GC leaf
+/// and can be parked inside the in-progress `XMLReadOnly` between feeds.
+#[derive(Collect)]
+#[collect(require_static)]
+pub struct RespStreamBuilder {
+    /// Whether the leading codec flag byte has been consumed.
+    codec_read: bool,
+    /// Streaming inflater (`Some` for deflate, `None` for a raw stream).
+    inflate: Option<Decompress>,
+    /// Reusable scratch for one inflate step.
+    scratch: Vec<u8>,
+    /// Inflated-but-not-yet-parsed bytes (the partial header, or the tail after
+    /// the last complete record).
+    buf: Vec<u8>,
+    /// Whether the RESP header (magic, qname, columns) has been parsed.
+    header_done: bool,
+    /// Whether a terminator/malformed marker was reached; further feeds no-op.
+    finished: bool,
+    /// The arena under construction.
+    b: Builder,
+    /// Interned column-name refs, in record order.
+    col_refs: Vec<u32>,
+    soap_uri: u32,
+    soap_prefix: u32,
+    env_idx: u32,
+    body_idx: u32,
+    root_idx: u32,
+    row_name: u32,
+    /// Last row appended under the response root (for sibling chaining).
+    last_row: u32,
+}
+
+impl RespStreamBuilder {
+    /// Streaming-path builder: the input begins with the 1-byte codec flag and
+    /// may be deflate-compressed (inflated here, incrementally).
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        let mut b = Builder {
+            nodes: NodeArena::new(),
+            strings: StrArena::new(),
+            intern: HashMap::new(),
+            decls: Vec::new(),
+        };
+
+        // SOAP envelope wrapper — emitted unconditionally so the consumer always
+        // finds a Body, even on a malformed/empty stream.
+        let soap_uri = b.intern("http://schemas.xmlsoap.org/soap/envelope/");
+        let soap_prefix = b.intern("SOAP-ENV");
+        let env_name = b.intern("Envelope");
+        let body_name = b.intern("Body");
+        let env_idx = b
+            .nodes
+            .push(elem_record(env_name, soap_uri, soap_prefix, NO_NODE));
+        b.decls.push(NsDeclReadOnly {
+            node: env_idx,
+            prefix: soap_prefix,
+            uri: soap_uri,
+        });
+        let body_idx = b
+            .nodes
+            .push(elem_record(body_name, soap_uri, soap_prefix, env_idx));
+        b.nodes.at_mut(env_idx).set_first_child(body_idx);
+
+        Self {
+            codec_read: false,
+            inflate: None,
+            scratch: vec![0u8; 64 * 1024],
+            buf: Vec::new(),
+            header_done: false,
+            finished: false,
+            b,
+            col_refs: Vec::new(),
+            soap_uri,
+            soap_prefix,
+            env_idx,
+            body_idx,
+            root_idx: NO_NODE,
+            row_name: NO_NODE,
+            last_row: NO_NODE,
+        }
+    }
+
+    /// One-shot builder for already-decompressed input with no leading codec
+    /// flag: bytes are appended verbatim, no flag consumed, no inflate run.
+    pub fn new_decompressed() -> Self {
+        let mut me = Self::new();
+        me.codec_read = true; // there is no codec flag in the buffer
+        me.inflate = None; // raw passthrough
+        me
+    }
+
+    /// Append a raw chunk: consume the codec flag (first chunk only), inflate
+    /// into the parse buffer, then parse the header and every complete record.
+    pub fn feed(&mut self, raw: &[u8]) {
+        if self.finished {
+            return;
+        }
+        let rest = self.consume_codec_flag(raw);
+        self.inflate_into_buf(rest);
+        if !self.header_done && !self.try_parse_header() {
+            return;
+        }
+        self.parse_records();
+    }
+
+    /// Finalise: parse anything still buffered, then freeze the arena. Tolerant
+    /// of a truncated stream (mirrors the one-shot parser).
+    pub fn finish(mut self) -> E4XStoreReadOnly {
+        if !self.finished {
+            if !self.header_done {
+                self.try_parse_header();
+            }
+            self.parse_records();
+        }
+        finish_store(self.b, vec![self.env_idx])
+    }
+
+    /// Consume the leading 1-byte codec flag (0 raw, 1 deflate) on the first
+    /// chunk, selecting the inflate mode; returns the remaining bytes.
+    fn consume_codec_flag<'r>(&mut self, raw: &'r [u8]) -> &'r [u8] {
+        if self.codec_read {
+            return raw;
+        }
+        match raw.split_first() {
+            Some((&flag, rest)) => {
+                // PHP `zlib.deflate` emits raw deflate (RFC1951, no zlib header).
+                self.inflate = (flag == 1).then(|| Decompress::new(false));
+                self.codec_read = true;
+                rest
+            }
+            None => raw,
+        }
+    }
+
+    /// Inflate `input` into `self.buf` (or copy verbatim in raw mode).
+    fn inflate_into_buf(&mut self, mut input: &[u8]) {
+        let Self {
+            inflate,
+            scratch,
+            buf,
+            finished,
+            ..
+        } = self;
+        let Some(dec) = inflate.as_mut() else {
+            buf.extend_from_slice(input);
+            return;
+        };
+        loop {
+            let in_before = dec.total_in();
+            let out_before = dec.total_out();
+            let status = dec.decompress(input, &mut scratch[..], FlushDecompress::None);
+            let consumed = (dec.total_in() - in_before) as usize;
+            let produced = (dec.total_out() - out_before) as usize;
+            if produced > 0 {
+                buf.extend_from_slice(&scratch[..produced]);
+            }
+            input = &input[consumed..];
+            match status {
+                Ok(Status::StreamEnd) => break,
+                Err(_) => {
+                    *finished = true;
+                    break;
+                }
+                Ok(_) => {}
+            }
+            if consumed == 0 && produced == 0 {
+                break;
+            }
+        }
+    }
+
+    /// Try to parse the RESP header from `self.buf`. Returns `true` once the
+    /// header is resolved (parsed, or determined malformed → empty body),
+    /// `false` if more bytes are needed (the buffer is left intact for a retry).
+    fn try_parse_header(&mut self) -> bool {
+        let (consumed, root_qname, ns_uri, row_el, names) = match scan_header(&self.buf) {
+            HeaderScan::NeedMore => return false,
+            HeaderScan::Bad => {
+                // Bad magic / absurd column count: stop with just Envelope/Body.
+                self.header_done = true;
+                self.finished = true;
+                return true;
+            }
+            HeaderScan::Ok {
+                consumed,
+                root_qname,
+                ns_uri,
+                row_el,
+                names,
+            } => (consumed, root_qname, ns_uri, row_el, names),
+        };
+
+        // Commit: build the response root and intern the column names.
+        let Self {
+            b,
+            col_refs,
+            row_name,
+            root_idx,
+            body_idx,
+            ..
+        } = self;
+        let (root_prefix_str, root_local_str) = match root_qname.split_once(':') {
+            Some((p, l)) => (Some(p), l),
+            None => (None, root_qname.as_str()),
+        };
+        let root_local = b.intern(root_local_str);
+        let root_ns = if ns_uri.is_empty() {
+            NO_NODE
+        } else {
+            b.intern(&ns_uri)
+        };
+        let root_prefix = root_prefix_str.map(|p| b.intern(p)).unwrap_or(NO_NODE);
+        *row_name = b.intern(&row_el);
+        for name in &names {
+            col_refs.push(b.intern(name));
+        }
+        let new_root = b
+            .nodes
+            .push(elem_record(root_local, root_ns, root_prefix, *body_idx));
+        b.nodes.at_mut(*body_idx).set_first_child(new_root);
+        if root_ns != NO_NODE {
+            let decl_prefix = if root_prefix != NO_NODE {
+                root_prefix
+            } else {
+                b.intern("")
+            };
+            b.decls.push(NsDeclReadOnly {
+                node: new_root,
+                prefix: decl_prefix,
+                uri: root_ns,
+            });
+        }
+        *root_idx = new_root;
+
+        self.buf.drain(..consumed);
+        self.header_done = true;
+        true
+    }
+
+    /// Parse every complete record currently buffered, appending rows (and a
+    /// trailing fault) to the arena. Stops at the first incomplete record,
+    /// leaving its bytes buffered for the next feed.
+    fn parse_records(&mut self) {
+        if !self.header_done || self.finished {
+            return;
+        }
+        let col_count = self.col_refs.len();
+        let mut pos = 0usize;
+        loop {
+            match scan_record(&self.buf[pos..], col_count) {
+                Scan::Incomplete => break,
+                Scan::Row { len } => {
+                    self.build_one_row(pos, pos + len);
+                    pos += len;
+                }
+                Scan::End { len } => {
+                    pos += len;
+                    self.finished = true;
+                    break;
+                }
+                Scan::Fault { len, msg } => {
+                    append_fault(
+                        &mut self.b,
+                        self.body_idx,
+                        self.root_idx,
+                        self.soap_uri,
+                        self.soap_prefix,
+                        &msg,
+                    );
+                    pos += len;
+                    self.finished = true;
+                    break;
+                }
+                Scan::Malformed => {
+                    self.finished = true;
+                    break;
+                }
+            }
+        }
+        if pos > 0 {
+            self.buf.drain(..pos);
+        }
+    }
+
+    /// Append one complete row (`self.buf[start..end]`, known whole) as a
+    /// `<rowElement>` with one `<column>value</column>` leaf per column.
+    fn build_one_row(&mut self, start: usize, end: usize) {
+        let Self {
+            buf,
+            b,
+            col_refs,
+            row_name,
+            root_idx,
+            last_row,
+            ..
+        } = self;
+        let mut c = RespCursor::new(&buf[start..end]);
+        let _marker = c.u8(); // 0x01, validated by scan_record
+
+        let row_idx = b
+            .nodes
+            .push(elem_record(*row_name, NO_NODE, NO_NODE, *root_idx));
+        if *last_row == NO_NODE {
+            b.nodes.at_mut(*root_idx).set_first_child(row_idx);
+        } else {
+            b.nodes.at_mut(*last_row).next_sibling = row_idx;
+        }
+        *last_row = row_idx;
+
+        let mut last_col = NO_NODE;
+        for &col_name in col_refs.iter() {
+            let nf = c.u8().unwrap_or(0);
+            let col_idx = b
+                .nodes
+                .push(elem_record(col_name, NO_NODE, NO_NODE, row_idx));
+            if nf == 0x01
+                && let Some(slice) = c.lp_bytes()
+                && !slice.is_empty()
+            {
+                // Raw value text stored verbatim (no XML (un)escaping): the
+                // single-child-text collapse folds it into `value`.
+                let cow = String::from_utf8_lossy(slice);
+                let vref = b.intern(&cow);
+                b.nodes.at_mut(col_idx).set_value(vref);
+            }
+            if last_col == NO_NODE {
+                b.nodes.at_mut(row_idx).set_first_child(col_idx);
+            } else {
+                b.nodes.at_mut(last_col).next_sibling = col_idx;
+            }
+            last_col = col_idx;
+        }
+    }
+}
+
+/// Outcome of [`scan_header`].
+enum HeaderScan {
+    NeedMore,
+    Bad,
+    Ok {
+        consumed: usize,
+        root_qname: String,
+        ns_uri: String,
+        row_el: String,
+        names: Vec<String>,
+    },
+}
+
+/// Scan the RESP header at the front of `data` without touching the builder, so
+/// the caller can commit only once the whole header is present.
+fn scan_header(data: &[u8]) -> HeaderScan {
+    let mut c = RespCursor::new(data);
+    match c.take(4) {
+        Some(m) if m == b"RESP" => {}
+        Some(_) => return HeaderScan::Bad,
+        None => return HeaderScan::NeedMore,
+    }
+    if c.u8().is_none() {
+        return HeaderScan::NeedMore; // version
+    }
+    let Some(root_qname) = c.lp_string() else {
+        return HeaderScan::NeedMore;
+    };
+    let Some(ns_uri) = c.lp_string() else {
+        return HeaderScan::NeedMore;
+    };
+    let Some(row_el) = c.lp_string() else {
+        return HeaderScan::NeedMore;
+    };
+    let Some(col_count) = c.varint() else {
+        return HeaderScan::NeedMore;
+    };
+    // Defensive cap: a corrupt varint must not spin a near-infinite loop.
+    if col_count > 100_000 {
+        return HeaderScan::Bad;
+    }
+    let mut names: Vec<String> = Vec::with_capacity(col_count);
+    for _ in 0..col_count {
+        match c.lp_string() {
+            Some(s) => names.push(s),
+            None => return HeaderScan::NeedMore,
+        }
+    }
+    HeaderScan::Ok {
+        consumed: c.pos,
+        root_qname,
+        ns_uri,
+        row_el,
+        names,
+    }
+}
+
+/// Outcome of scanning one record at the front of the parse buffer.
+enum Scan {
+    /// Not all bytes are present yet — wait for the next feed.
+    Incomplete,
+    /// A complete row of `len` bytes.
+    Row { len: usize },
+    /// The regular END terminator (`len` bytes consumed).
+    End { len: usize },
+    /// A fault terminator carrying `msg` (`len` bytes consumed).
+    Fault { len: usize, msg: String },
+    /// An unexpected marker byte — stop tolerantly.
+    Malformed,
+}
+
+/// Determine whether a whole record sits at the front of `data`, without
+/// building any nodes (so a truncated tail never leaves a half-row in the
+/// arena). Mirrors the grammar consumed by [`RespStreamBuilder::build_one_row`].
+fn scan_record(data: &[u8], col_count: usize) -> Scan {
+    let mut c = RespCursor::new(data);
+    let marker = match c.u8() {
+        Some(m) => m,
+        None => return Scan::Incomplete,
+    };
+    match marker {
+        0x00 => Scan::End { len: c.pos },
+        0xFF => match c.lp_string() {
+            Some(msg) => Scan::Fault { len: c.pos, msg },
+            None => Scan::Incomplete,
+        },
+        0x01 => {
+            for _ in 0..col_count {
+                let nf = match c.u8() {
+                    Some(v) => v,
+                    None => return Scan::Incomplete,
+                };
+                if nf == 0x01 && c.lp_bytes().is_none() {
+                    return Scan::Incomplete;
+                }
+            }
+            Scan::Row { len: c.pos }
+        }
+        _ => Scan::Malformed,
     }
 }
 
