@@ -20,6 +20,7 @@ mod boolean;
 mod class;
 mod date;
 mod error;
+mod export_utils;
 pub mod flash;
 mod function;
 pub mod global_scope;
