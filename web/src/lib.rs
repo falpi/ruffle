@@ -16,6 +16,36 @@ use external_interface::{external_to_js_value, js_to_external_value};
 use input::{web_input_to_ruffle_key_descriptor, web_to_ruffle_text_control};
 use js_sys::{Error as JsError, Uint8Array};
 use ruffle_core::context::UpdateContext;
+use std::alloc::{GlobalAlloc, Layout};
+
+/// Thin wrapper that forwards every `GlobalAlloc` call to the shared
+/// `GLOBAL_TILEMALLOC` instance defined in `ruffle_core::tilemalloc`.
+///
+/// `#[global_allocator]` requires a `static` in the current crate, so we
+/// can't tag `GLOBAL_TILEMALLOC` directly. Forwarding here keeps a single
+/// allocator instance shared between the web binary's allocation path and
+/// any in-`ruffle_core` code that wants to read its stats (snapshot via
+/// `ruffle_core::tilemalloc::GLOBAL_TILEMALLOC.snapshot_stats()`).
+struct GlobalTilemallocRef;
+
+unsafe impl GlobalAlloc for GlobalTilemallocRef {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        unsafe { ruffle_core::tilemalloc::GLOBAL_TILEMALLOC.alloc(layout) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { ruffle_core::tilemalloc::GLOBAL_TILEMALLOC.dealloc(ptr, layout) }
+    }
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        unsafe { ruffle_core::tilemalloc::GLOBAL_TILEMALLOC.alloc_zeroed(layout) }
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        unsafe { ruffle_core::tilemalloc::GLOBAL_TILEMALLOC.realloc(ptr, layout, new_size) }
+    }
+}
+
+#[global_allocator]
+static GLOBAL: GlobalTilemallocRef = GlobalTilemallocRef;
+
 use ruffle_core::context_menu::ContextMenuCallback;
 use ruffle_core::events::{GamepadButton, MouseButton, MouseWheelDelta, TextControlCode};
 use ruffle_core::tag_utils::SwfMovie;
@@ -1356,6 +1386,41 @@ fn parse_movie_parameters(input: &JsValue) -> Vec<(String, String)> {
     params
 }
 
+/// Returns a JSON snapshot of the tilemalloc state for tooling.
+/// Per-size-class counters (alive/free tiles, extent count, extents
+/// added, alloc/dealloc totals) plus fallback (dlmalloc) totals.
+/// Schema is the stable machine-readable contract — see
+/// `ruffle_core::tilemalloc::stats::TileAllocatorStats::to_json`.
+#[wasm_bindgen(js_name = "tilemallocStats")]
+pub fn tilemalloc_stats() -> String {
+    ruffle_core::tilemalloc::GLOBAL_TILEMALLOC
+        .snapshot_stats()
+        .to_json()
+}
+
+/// Emits a single-line snapshot of the tilemalloc state to the
+/// browser console as a String. Designed for direct visual
+/// diff between snapshots in DevTools without a JSON parser.
+#[wasm_bindgen(js_name = "tilemallocTable")]
+pub fn tilemalloc_table() -> String {
+    ruffle_core::tilemalloc::GLOBAL_TILEMALLOC
+        .snapshot_stats()
+        .to_table()
+}
+
+/// Release every fully-empty tilemalloc pool extent back to the system
+/// allocator (dlmalloc) and return the bytes reclaimed (no logging). Call it
+/// from an idle or post-GC hook — when the GC has just freed a transient
+/// spike's objects, the extents that held only that garbage become fully free
+/// and can be handed back, so later allocations (including the fallback path)
+/// reuse the memory instead of growing past the WASM cap. Inspect the effect
+/// via `tilemallocTable` (the `released` counter / dropping `ext`). See
+/// `TileAllocator::trim`.
+#[wasm_bindgen(js_name = "tilemallocTrim")]
+pub fn tilemalloc_trim() -> f64 {
+    ruffle_core::tilemalloc::GLOBAL_TILEMALLOC.trim() as f64
+}
+
 #[wasm_bindgen(start)]
 fn global_init() {
     // Redirect Log to Tracing
@@ -1412,6 +1477,53 @@ fn global_init() {
             });
         });
     }));
+
+    // Expose tilemalloc diagnostic helpers as plain functions on the
+    // browser `window`, so they can be invoked directly from the
+    // DevTools console:
+    //
+    //     window.tilemallocStats()   → returns JSON snapshot
+    //     window.tilemallocTable()   → returns String snapshot
+    //     window.tilemallocTrim()    → releases empty extents, returns bytes freed
+    //
+    // No JS import wiring is required by the host page. The closures
+    // are intentionally leaked via `forget()`: they live for the
+    // module's lifetime, same as any global helper.
+    if let Some(window) = web_sys::window() {
+        let stats_cb = Closure::<dyn Fn() -> String>::new(|| {
+            ruffle_core::tilemalloc::GLOBAL_TILEMALLOC
+                .snapshot_stats()
+                .to_json()
+        });
+        let _ = js_sys::Reflect::set(
+            &window,
+            &JsValue::from_str("tilemallocStats"),
+            stats_cb.as_ref(),
+        );
+        stats_cb.forget();
+
+        let table_cb = Closure::<dyn Fn() -> String>::new(|| {
+            ruffle_core::tilemalloc::GLOBAL_TILEMALLOC
+                .snapshot_stats()
+                .to_table()
+        });
+        let _ = js_sys::Reflect::set(
+            &window,
+            &JsValue::from_str("tilemallocTable"),
+            table_cb.as_ref(),
+        );
+        table_cb.forget();
+
+        let trim_cb = Closure::<dyn Fn() -> f64>::new(|| {
+            ruffle_core::tilemalloc::GLOBAL_TILEMALLOC.trim() as f64
+        });
+        let _ = js_sys::Reflect::set(
+            &window,
+            &JsValue::from_str("tilemallocTrim"),
+            trim_cb.as_ref(),
+        );
+        trim_cb.forget();
+    }
 
     tracing::info!("Ruffle WASM module has been initialized");
 }
