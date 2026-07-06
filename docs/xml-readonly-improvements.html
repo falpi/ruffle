@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en" data-doc="xml-readonly-improvements">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XMLReadOnly — design &amp; internals</title>
+<style>
+  :root{
+    --bg:#ffffff; --surface:#f6f6f4; --surface2:#efeee9;
+    --text:#1d1d1b; --text2:#5f5e5a;
+    --border:#d3d1c7; --border2:#b4b2a9;
+    --accent:#534ab7; --accent-soft:#7f77dd;
+    --good:#1d9e75; --warn:#d85a30; --info:#378add;
+    --code-bg:#f1efe8;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#1a1a18; --surface:#242420; --surface2:#2c2c28;
+      --text:#ecece9; --text2:#b4b2a9;
+      --border:#444441; --border2:#5f5e5a;
+      --accent:#afa9ec; --accent-soft:#7f77dd;
+      --good:#5dcaa5; --warn:#f0997b; --info:#85b7eb;
+      --code-bg:#26261f;
+    }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:16px; line-height:1.65;
+  }
+  .wrap{max-width:900px; margin:0 auto; padding:48px 28px 96px}
+  header.doc{border-bottom:1px solid var(--border); padding-bottom:24px; margin-bottom:8px}
+  header.doc h1{font-size:30px; margin:0 0 6px; letter-spacing:-.01em}
+  header.doc .sub{color:var(--text2); font-size:15px}
+  header.doc .meta{color:var(--text2); font-size:13px; margin-top:14px}
+  header.doc .meta code{font-size:12px}
+  h2{font-size:23px; margin:52px 0 4px; letter-spacing:-.01em; scroll-margin-top:20px}
+  h2 .n{color:var(--accent); font-variant-numeric:tabular-nums; margin-right:10px}
+  h3{font-size:17px; margin:28px 0 4px}
+  p{margin:12px 0}
+  a{color:var(--accent)}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.88em;
+    background:var(--code-bg); padding:.12em .4em; border-radius:4px}
+  pre{background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+    padding:14px 16px; overflow:auto; font-size:13px; line-height:1.5}
+  pre code{background:none; padding:0}
+  .lead{font-size:18px; color:var(--text)}
+  ul,ol{padding-left:22px} li{margin:5px 0}
+  nav.toc{background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:18px 22px; margin:28px 0 8px}
+  nav.toc strong{display:block; font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--text2); margin-bottom:8px}
+  nav.toc ol{margin:0; columns:2; column-gap:32px}
+  nav.toc a{text-decoration:none; color:var(--text)}
+  nav.toc a:hover{color:var(--accent)}
+  .note{border-left:3px solid var(--accent); background:var(--surface);
+    padding:12px 16px; border-radius:0 8px 8px 0; margin:18px 0; font-size:15px}
+  .note.good{border-color:var(--good)}
+  .note.warn{border-color:var(--warn)}
+  .note .lbl{font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--text2); display:block; margin-bottom:2px}
+  figure{margin:24px 0; background:var(--surface); border:1px solid var(--border);
+    border-radius:10px; padding:20px}
+  figure svg{display:block; width:100%; height:auto}
+  figcaption{color:var(--text2); font-size:13px; margin-top:12px; text-align:center}
+  table{width:100%; border-collapse:collapse; margin:20px 0; font-size:14px}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:top}
+  th{font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--text2);
+    border-bottom:2px solid var(--border2)}
+  td.num,th.num{text-align:right; font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,monospace}
+  tr.sum td{font-weight:600; border-top:2px solid var(--border2); background:var(--surface)}
+  .neg{color:var(--warn); font-weight:600}
+  td code{white-space:nowrap}
+  svg text{font-family:ui-sans-serif,system-ui,sans-serif}
+  .s-ti{font-weight:600; fill:var(--text); font-size:14px}
+  .s-h{font-weight:600; fill:var(--text); font-size:12px}
+  .s-t{fill:var(--text); font-size:12px}
+  .s-s{fill:var(--text2); font-size:10px}
+  .s-mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+  .s-box{fill:var(--bg); stroke:var(--border2); stroke-width:1.5}
+  .s-surf{fill:var(--surface2); stroke:var(--border2); stroke-width:1.2}
+  .s-hi{fill:var(--accent); fill-opacity:.14; stroke:var(--accent); stroke-width:1.5}
+  .s-good{fill:var(--good); fill-opacity:.16; stroke:var(--good); stroke-width:1.5}
+  .s-warn{fill:var(--warn); fill-opacity:.16; stroke:var(--warn); stroke-width:1.5}
+  .s-line{stroke:var(--border2); stroke-width:1.5; fill:none}
+  .s-arrow{stroke:var(--accent); stroke-width:1.6; fill:none}
+  .s-acc{fill:var(--accent)} .s-good-f{fill:var(--good)} .s-warn-f{fill:var(--warn)}
+  .footer{margin-top:64px; padding-top:20px; border-top:1px solid var(--border);
+    color:var(--text2); font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <h1>XMLReadOnly</h1>
+  <div class="sub">An immutable, read-only XML type for AVM2 — design, compact store, and memory optimizations.</div>
+  <div class="meta">
+    Ruffle · AVM2 / E4X &nbsp;·&nbsp; branch <code>xml-readonly-improvements</code> &nbsp;·&nbsp;
+    last updated 2026-06-21 &nbsp;·&nbsp; single self-contained file (every diagram is inline SVG, no external dependencies).
+  </div>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#motivation">Motivation</a></li>
+    <li><a href="#tracing">Architecture: O(1) GC tracing</a></li>
+    <li><a href="#arena">Chunked arena &amp; logical indices</a></li>
+    <li><a href="#record">The node record (28 bytes)</a></li>
+    <li><a href="#optimizations">Byte-level optimizations</a></li>
+    <li><a href="#polyglot">Polyglot XMLList &amp; the <code>is XML</code> masquerade</a></li>
+    <li><a href="#sortkeyed">Native <code>sortKeyed</code></a></li>
+    <li><a href="#sorting">Memory dynamics under synchronous sorting</a></li>
+    <li><a href="#wasm64">wasm64 &amp; encoding caps</a></li>
+    <li><a href="#integration">Application integration</a></li>
+    <li><a href="#appendix-a">Appendix A — changes to existing sources</a></li>
+    <li><a href="#appendix-b">Appendix B — new files</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="motivation"><span class="n">1</span>Motivation</h2>
+<p class="lead">
+  Ruffle's <code>XML</code> type (the mutable E4X type) models every node as its own <code>Gc</code> object —
+  an <code>E4XNode</code> — wired into a parent/child graph and carrying change-notification machinery for
+  data binding.
+</p>
+<p>
+  For <strong>large, never-mutated</strong> documents — data providers with 100k+ rows, e.g. a measured
+  workload of ~250,000 rows — that per-node overhead, and the <strong>garbage-collector tracing</strong> it
+  implies, is the dominant memory cost. Yet once the document is parsed none of that flexibility is needed:
+  the document is read-only.
+</p>
+<p>
+  <strong>XMLReadOnly</strong> is an immutable parallel to <code>XML</code>: parsed <em>once</em> into a
+  compact arena, never mutated, emitting no notifications. It supports the full E4X <em>read</em> syntax
+  (<code>.child</code>, <code>..desc</code>, <code>@attr</code>, <code>for each</code>, <code>.()</code>
+  filtering) through native dispatch, and navigation returns real <code>XMLList</code> values whose elements
+  are <code>XMLReadOnly</code> — so <code>is XMLList</code> holds and results feed straight into the usual
+  list data-provider pipeline.
+</p>
+<div class="note good">
+  <span class="lbl">Net result</span>
+  On the ~250k-row workload: <strong>live total 670&nbsp;MB → 449&nbsp;MB (−33%)</strong>, node record
+  <strong>36&nbsp;B → 28&nbsp;B</strong>, node count <strong>10.77M → 5.50M</strong> — at parity of rendering
+  and of the E4X read API.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="tracing"><span class="n">2</span>Architecture: O(1) GC tracing</h2>
+<p>
+  The key architectural insight: a <strong>read-only tree cannot contain cycles</strong>. That lets the store
+  be represented as <em>pure owned Rust data</em> (Vecs of records + a string pool) inside a
+  <strong>single <code>Gc</code></strong>, marked <code>#[collect(require_static)]</code>. To gc-arena that
+  <code>Gc</code> is an opaque unit, so GC tracing becomes <strong>O(1)</strong> regardless of node count,
+  instead of O(nodes) as for the mutable <code>XML</code> node graph.
+</p>
+
+<figure>
+<svg viewBox="0 0 820 300" role="img" aria-labelledby="d1t d1d">
+  <title id="d1t">GC tracing comparison</title>
+  <desc id="d1d">On the left, mutable XML traces N E4XNode Gc objects; on the right, XMLReadOnly traces a single require_static Gc.</desc>
+  <text class="s-ti" x="20" y="26">XML — mutable E4X</text>
+  <text class="s-s" x="20" y="44">one Gc per E4XNode · GC visits every node</text>
+  <g class="s-line">
+    <line x1="120" y1="80" x2="70" y2="130"/><line x1="120" y1="80" x2="120" y2="130"/>
+    <line x1="120" y1="80" x2="170" y2="130"/>
+    <line x1="70" y1="130" x2="45" y2="180"/><line x1="70" y1="130" x2="95" y2="180"/>
+    <line x1="170" y1="130" x2="150" y2="180"/><line x1="170" y1="130" x2="195" y2="180"/>
+  </g>
+  <g>
+    <circle class="s-box" cx="120" cy="80" r="18"/>
+    <circle class="s-box" cx="70" cy="130" r="18"/><circle class="s-box" cx="120" cy="130" r="18"/>
+    <circle class="s-box" cx="170" cy="130" r="18"/>
+    <circle class="s-box" cx="45" cy="180" r="18"/><circle class="s-box" cx="95" cy="180" r="18"/>
+    <circle class="s-box" cx="150" cy="180" r="18"/><circle class="s-box" cx="195" cy="180" r="18"/>
+  </g>
+  <g class="s-s s-mono" text-anchor="middle" font-size="8">
+    <text x="120" y="83">E4XNode</text><text x="70" y="133">E4XNode</text><text x="120" y="133">E4XNode</text>
+    <text x="170" y="133">E4XNode</text><text x="45" y="183">E4XNode</text><text x="95" y="183">E4XNode</text>
+    <text x="150" y="183">E4XNode</text><text x="195" y="183">E4XNode</text>
+  </g>
+  <text class="s-mono s-warn-f" x="120" y="232" text-anchor="middle" font-size="13">tracing = O(N)</text>
+  <text class="s-s" x="120" y="252" text-anchor="middle">~250k rows ≈ 10.77M nodes → 10.77M visits</text>
+
+  <line x1="410" y1="60" x2="410" y2="260" class="s-line" stroke-dasharray="4 5"/>
+
+  <text class="s-ti" x="470" y="26">XMLReadOnly</text>
+  <text class="s-s" x="470" y="44">one Gc for the whole document</text>
+  <rect class="s-hi" x="470" y="64" width="320" height="150" rx="8"/>
+  <text class="s-mono s-acc" x="486" y="86" font-size="11">Gc&lt;E4XStoreReadOnly&gt;</text>
+  <text class="s-mono s-s" x="486" y="102" font-size="10">#[collect(require_static)]</text>
+  <g class="s-surf">
+    <rect x="486" y="116" width="288" height="40" rx="4"/>
+    <rect x="486" y="162" width="288" height="40" rx="4"/>
+  </g>
+  <text class="s-s s-mono" x="494" y="140" font-size="10">Vec&lt;Box&lt;[E4XNodeDataReadOnly]&gt;&gt;  (nodes)</text>
+  <text class="s-s s-mono" x="494" y="186" font-size="10">Vec&lt;Box&lt;[u8]&gt;&gt;  (string arena)</text>
+  <text class="s-mono s-good-f" x="630" y="240" text-anchor="middle" font-size="13">tracing = O(1)</text>
+  <text class="s-s" x="630" y="260" text-anchor="middle">1 opaque unit, whatever the node count</text>
+</svg>
+<figcaption>The store lives behind a single static <code>Gc</code>: the collector never walks the nodes.</figcaption>
+</figure>
+
+<p>
+  This also sidesteps the synchronous-<code>System.gc()</code> / gc-arena pacing pressure that large mutable
+  <code>XML</code> graphs create: with no millions of <code>Gc</code> nodes to collect, the document itself
+  generates no collection pressure.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="arena"><span class="n">3</span>Chunked arena &amp; logical indices</h2>
+<p>
+  The store uses two <strong>chunked</strong> arenas: one for node records
+  (<code>Vec&lt;Box&lt;[E4XNodeDataReadOnly]&gt;&gt;</code>, 65,536 records per chunk) and one for string bytes
+  (<code>Vec&lt;Box&lt;[u8]&gt;&gt;</code>, 1&nbsp;MiB chunks). Chunking eliminates copy-on-grow: a single
+  contiguous <code>Vec</code> would reallocate and <em>relocate</em> everything as it grows; fixed chunks are
+  never moved.
+</p>
+<p>
+  As a consequence every reference is a <strong>logical <code>u32</code> index</strong>, not a pointer: the
+  high bits select the chunk, the low bits the in-chunk offset. This is crucial for 64-bit robustness (see
+  §9): crossing the 4&nbsp;GB boundary does not break indexing, because each access does <code>as usize</code>
+  and widens on its own.
+</p>
+
+<figure>
+<svg viewBox="0 0 820 320" role="img" aria-labelledby="d2t d2d">
+  <title id="d2t">Chunked arena and logical-index decode</title>
+  <desc id="d2d">A u32 index splits into a chunk number (high bits) and an in-chunk offset (low bits).</desc>
+  <text class="s-ti" x="20" y="24">Node arena — <tspan class="s-mono" font-size="12">Vec&lt;Box&lt;[E4XNodeDataReadOnly]&gt;&gt;</tspan></text>
+  <g>
+    <rect class="s-surf" x="20" y="40" width="150" height="56" rx="6"/>
+    <rect class="s-surf" x="185" y="40" width="150" height="56" rx="6"/>
+    <rect class="s-hi"   x="350" y="40" width="150" height="56" rx="6"/>
+    <rect class="s-surf" x="515" y="40" width="150" height="56" rx="6"/>
+    <text class="s-s" x="95"  y="72" text-anchor="middle">chunk 0</text>
+    <text class="s-s" x="260" y="72" text-anchor="middle">chunk 1</text>
+    <text class="s-acc s-h" x="425" y="69" text-anchor="middle">chunk 2</text>
+    <text class="s-s" x="590" y="72" text-anchor="middle">chunk 3 …</text>
+    <text class="s-s" x="95"  y="88" text-anchor="middle">65,536 records</text>
+    <text class="s-s" x="425" y="86" text-anchor="middle">65,536 records</text>
+  </g>
+  <rect class="s-good" x="408" y="46" width="9" height="44"/>
+  <text class="s-good-f s-s" x="412" y="112" text-anchor="middle">offset</text>
+
+  <text class="s-ti" x="20" y="168">Logical index <tspan class="s-mono" font-size="12">u32</tspan></text>
+  <rect class="s-box" x="20" y="184" width="300" height="34" rx="4"/>
+  <line x1="170" y1="184" x2="170" y2="218" class="s-line"/>
+  <text class="s-acc s-mono" x="95" y="206" text-anchor="middle" font-size="12">chunk = idx » 16</text>
+  <text class="s-good-f s-mono" x="245" y="206" text-anchor="middle" font-size="12">offset = idx &amp; 0xFFFF</text>
+  <text class="s-s" x="20" y="244">bits 31 … 16 (chunk)</text>
+  <text class="s-s" x="320" y="244" text-anchor="end">bits 15 … 0 (offset)</text>
+
+  <path class="s-arrow" d="M 150 184 C 200 150, 380 130, 425 96" marker-end="url(#ah)"/>
+  <path d="M 270 184 C 330 150, 405 120, 412 92" class="s-arrow" stroke="var(--good)" marker-end="url(#ahg)"/>
+  <defs>
+    <marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="var(--accent)"/></marker>
+    <marker id="ahg" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="var(--good)"/></marker>
+  </defs>
+
+  <text class="s-mono s-s" x="700" y="206" font-size="12">NODE_CHUNK_SHIFT = 16</text>
+  <text class="s-mono s-s" x="700" y="226" font-size="12">STR_CHUNK_SHIFT&nbsp;&nbsp;= 20</text>
+</svg>
+<figcaption>Index = <code>(chunk « shift) | offset</code>. No pointers: growth never relocates.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="record"><span class="n">4</span>The node record (28 bytes)</h2>
+<p>
+  Each node is a fixed-size <strong>28-byte</strong> record — seven <code>u32</code> fields — locked at
+  compile time by <code>const _: () = assert!(size_of::&lt;E4XNodeDataReadOnly&gt;() == 28)</code>. Two fields
+  are <em>packed</em> to save bytes without depending on the XML shape: <code>kind_parent</code> (node kind +
+  parent index) and <code>value_or_child</code> (a tagged union).
+</p>
+
+<figure>
+<svg viewBox="0 0 820 392" role="img" aria-labelledby="d3t d3d">
+  <title id="d3t">XMLReadOnly node record layout</title>
+  <desc id="d3d">Seven u32 fields in 28 bytes, with the bit-packing detail of kind_parent and the value_or_child tagged union.</desc>
+  <g text-anchor="middle">
+    <rect class="s-hi"  x="20"  y="34" width="102" height="64" rx="4"/>
+    <text class="s-s" x="71"  y="50">0–3</text>
+    <text class="s-t" x="71"  y="70"><tspan x="71">kind_</tspan><tspan x="71" dy="13">parent</tspan></text>
+    <text class="s-s" x="71"  y="93">u32</text>
+    <rect class="s-box" x="132" y="34" width="102" height="64" rx="4"/>
+    <text class="s-s" x="183" y="50">4–7</text><text class="s-t" x="183" y="76">name</text><text class="s-s" x="183" y="93">u32</text>
+    <rect class="s-hi"  x="244" y="34" width="102" height="64" rx="4"/>
+    <text class="s-s" x="295" y="50">8–11</text>
+    <text class="s-t" x="295" y="70"><tspan x="295">value_</tspan><tspan x="295" dy="13">or_child</tspan></text>
+    <text class="s-s" x="295" y="93">u32</text>
+    <rect class="s-box" x="356" y="34" width="102" height="64" rx="4"/>
+    <text class="s-s" x="407" y="50">12–15</text><text class="s-t" x="407" y="76">ns</text><text class="s-s" x="407" y="93">u32</text>
+    <rect class="s-box" x="468" y="34" width="102" height="64" rx="4"/>
+    <text class="s-s" x="519" y="50">16–19</text><text class="s-t" x="519" y="76">prefix</text><text class="s-s" x="519" y="93">u32</text>
+    <rect class="s-box" x="580" y="34" width="102" height="64" rx="4"/>
+    <text class="s-s" x="631" y="50">20–23</text>
+    <text class="s-t" x="631" y="70"><tspan x="631">next_</tspan><tspan x="631" dy="13">sibling</tspan></text>
+    <text class="s-s" x="631" y="93">u32</text>
+    <rect class="s-box" x="692" y="34" width="102" height="64" rx="4"/>
+    <text class="s-s" x="743" y="50">24–27</text>
+    <text class="s-t" x="743" y="70"><tspan x="743">first_</tspan><tspan x="743" dy="13">attr</tspan></text>
+    <text class="s-s" x="743" y="93">u32</text>
+    <text class="s-acc" x="71"  y="112" font-size="10">▼ packed</text>
+    <text class="s-acc" x="295" y="112" font-size="10">▼ tagged union</text>
+  </g>
+
+  <text class="s-h" x="20" y="150">kind_parent · bit packing (MSB → LSB)</text>
+  <rect class="s-box" x="20" y="158" width="70" height="30" rx="3"/>
+  <rect class="s-box" x="90" y="158" width="704" height="30" rx="3"/>
+  <text class="s-t" x="55"  y="178" text-anchor="middle" font-size="11">kind</text>
+  <text class="s-t" x="442" y="178" text-anchor="middle">parent index</text>
+  <text class="s-s" x="55"  y="204" text-anchor="middle">bits 31–29 (3)</text>
+  <text class="s-s" x="442" y="204" text-anchor="middle">bits 28–0 (29) — up to 536M nodes · PARENT_NONE = 0x1FFF_FFFF at the root</text>
+
+  <text class="s-h" x="20" y="244">value_or_child · tagged union (bit 31 = CHILD_FLAG)</text>
+  <rect class="s-hi"  x="20" y="252" width="24" height="30" rx="3"/>
+  <rect class="s-box" x="44" y="252" width="750" height="30" rx="3"/>
+  <text class="s-acc" x="32"  y="272" text-anchor="middle" font-size="9">b31</text>
+  <text class="s-t"   x="419" y="272" text-anchor="middle">payload · 31 bits</text>
+  <g>
+    <rect class="s-hi"  x="20" y="300" width="13" height="13" rx="2"/>
+    <text class="s-t" x="42" y="311">bit 31 = 1 → first-child index (low 31 bits)</text>
+    <rect class="s-box" x="20" y="320" width="13" height="13" rx="2"/>
+    <text class="s-t" x="42" y="331">bit 31 = 0 → value = string-arena reference</text>
+    <rect class="s-box" x="20" y="340" width="13" height="13" rx="2"/>
+    <text class="s-t" x="42" y="351">all bits set (NO_NODE) → empty: no value, no child</text>
+  </g>
+  <text class="s-s" x="20" y="378">Mutual exclusion is guaranteed by the collapse invariant, not by the data (see §5).</text>
+</svg>
+<figcaption>28 bytes = 7 × u32. <code>kind</code> rides in the parent's high bits; <code>value</code>/<code>first_child</code> share one slot via a flag.</figcaption>
+</figure>
+
+<table>
+  <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>kind_parent</code></td><td>high 3 bits = node kind (Element/Text/Attribute/Comment/PI); low 29 bits = parent index (<code>PARENT_NONE</code> at the root)</td></tr>
+    <tr><td><code>name</code></td><td>local-name reference into the string arena</td></tr>
+    <tr><td><code>value_or_child</code></td><td>union: empty / first-child index (bit 31 = 1) / value reference (bit 31 = 0)</td></tr>
+    <tr><td><code>ns</code> / <code>prefix</code></td><td>namespace-URI and prefix references (string arena)</td></tr>
+    <tr><td><code>next_sibling</code></td><td>next sibling index (children form a singly-linked list)</td></tr>
+    <tr><td><code>first_attr</code></td><td>first attribute index (attributes are nodes in the arena)</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="optimizations"><span class="n">5</span>Byte-level optimizations</h2>
+<p>
+  Three cumulative optimizations, all <strong>shape-safe</strong> (they do not depend on the particular XML
+  shape): they never regress versus the base case, whatever the content.
+</p>
+
+<h3>5.1 — Single-child-text collapse</h3>
+<p>
+  An element whose <em>only</em> child is text stores no separate Text node: the text goes <em>inline</em> in
+  the element's <code>value</code> field. The child Text node is <strong>synthesized on demand</strong> when
+  requested, by tagging the index with the <code>VIRTUAL_TEXT</code> flag (bit 31). Records are <code>Copy</code>
+  and the string is real in the arena, so the virtual identity is stable (<code>===</code>,
+  <code>parent()</code>, <code>childIndex()</code> all consistent). Mixed or multiple content → flushed as a
+  real node → behavior identical to before.
+</p>
+
+<figure>
+<svg viewBox="0 0 820 240" role="img" aria-labelledby="d4t d4d">
+  <title id="d4t">Single-child-text collapse</title>
+  <desc id="d4d">Before: an element plus a child text node. After: text inline in value, text node synthesized on demand.</desc>
+  <text class="s-ti" x="20" y="26">Before — 2 records</text>
+  <rect class="s-box" x="40" y="44" width="150" height="40" rx="6"/>
+  <text class="s-t" x="115" y="68" text-anchor="middle">&lt;title&gt; (Element)</text>
+  <line x1="115" y1="84" x2="115" y2="120" class="s-line"/>
+  <rect class="s-box" x="40" y="120" width="150" height="40" rx="6"/>
+  <text class="s-t" x="115" y="144" text-anchor="middle">"Alpha" (Text)</text>
+  <text class="s-s" x="115" y="186" text-anchor="middle">most nodes in the workload</text>
+  <text class="s-s" x="115" y="202" text-anchor="middle">were single-child text leaves</text>
+
+  <path class="s-arrow" d="M 250 110 L 330 110" marker-end="url(#a4)"/>
+  <defs><marker id="a4" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="var(--accent)"/></marker></defs>
+  <text class="s-good-f" x="290" y="100" text-anchor="middle" font-size="12">collapse</text>
+
+  <text class="s-ti" x="400" y="26">After — 1 record</text>
+  <rect class="s-good" x="420" y="44" width="240" height="56" rx="6"/>
+  <text class="s-t" x="540" y="66" text-anchor="middle">&lt;title&gt; (Element)</text>
+  <text class="s-mono s-good-f" x="540" y="86" text-anchor="middle" font-size="11">value = "Alpha"  (inline)</text>
+  <text class="s-s" x="420" y="128">Text node requested?</text>
+  <rect class="s-box" x="420" y="138" width="320" height="34" rx="6" stroke-dasharray="4 4"/>
+  <text class="s-mono s-s" x="435" y="159" font-size="11">idx | VIRTUAL_TEXT  → synthesized on demand</text>
+  <text class="s-good-f" x="420" y="198" font-size="12">~250k rows: 10.77M → 5.50M nodes · node store 369.7 → 189.0 MB</text>
+</svg>
+<figcaption>The 5.26M single-child text nodes leave the store; the "virtual" Text is produced only when read.</figcaption>
+</figure>
+
+<h3>5.2 — Kind packing</h3>
+<p>
+  The node kind (3 bits) is packed into the <strong>high bits</strong> of the parent index, fusing two fields
+  into <code>kind_parent</code>. The index space stays 29 bits (<code>PARENT_NONE = 0x1FFF_FFFF</code> as the
+  root sentinel). Record <strong>36 → 32 B</strong>.
+</p>
+
+<h3>5.3 — value / first_child union</h3>
+<p>
+  <code>value</code> and <code>first_child</code> share the <code>value_or_child</code> slot:
+  <code>NO_NODE</code> = empty; bit 31 (<code>CHILD_FLAG</code>) set → first-child index; otherwise → value
+  reference. No check on <code>kind</code> is needed: <strong>the flag disambiguates on its own</strong>.
+  Mutual exclusion is guaranteed by the <em>collapse invariant</em> (an element receives a value only if
+  <code>first_child == NO_NODE</code>; non-elements have no children), not by the data. Record
+  <strong>32 → 28 B</strong>.
+</p>
+
+<p style="color:var(--text2); font-size:14px;">All figures below are for the same ~250,000-row reference workload.</p>
+
+<table>
+  <thead><tr><th>Stage</th><th class="num">Record</th><th class="num">Nodes</th><th class="num">Node store</th><th class="num">Live total</th><th class="num">Δ</th></tr></thead>
+  <tbody>
+    <tr><td>Base (chunking)</td><td class="num">36 B</td><td class="num">10.77M</td><td class="num">369.7 MB</td><td class="num">670 MB</td><td class="num">—</td></tr>
+    <tr><td>+ single-child collapse</td><td class="num">36 B</td><td class="num">5.50M</td><td class="num">189.0 MB</td><td class="num">486 MB</td><td class="num neg">−184</td></tr>
+    <tr><td>+ kind packing</td><td class="num">32 B</td><td class="num">5.50M</td><td class="num">—</td><td class="num">463 MB</td><td class="num neg">−23</td></tr>
+    <tr><td>+ value/child union</td><td class="num">28 B</td><td class="num">5.50M</td><td class="num">~154 MB</td><td class="num">449 MB</td><td class="num neg">−14</td></tr>
+    <tr class="sum"><td>Cumulative</td><td class="num">36→28</td><td class="num">−49%</td><td class="num"></td><td class="num">670→449</td><td class="num neg">−221 (−33%)</td></tr>
+  </tbody>
+</table>
+
+<div class="note">
+  <span class="lbl">Memory note</span>
+  The node records are bulk-allocated in large arena chunks, not individually, so shrinking the record size
+  reduces the document's bulk footprint directly. <strong>28 B is a clean floor</strong>: going lower would
+  require shape-dependent choices (a side table for ns/prefix/attr) — evaluated and rejected.
+  Node hash-consing/interning was also evaluated and rejected: <code>parent</code>/<code>next_sibling</code>
+  are per-occurrence (irreducible position) and the value is already interned, so only a thin wrapper would be
+  shareable — at the cost of an indirection on the hot path.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="polyglot"><span class="n">6</span>Polyglot XMLList &amp; the <code>is XML</code> masquerade</h2>
+<p>
+  <code>XMLList</code> is made <strong>polyglot</strong>: its elements can be mutable <code>XML</code>
+  (<code>E4XNode</code>) or <code>XMLReadOnly</code>, modeled by the enum
+  <code>E4XOrXml { Xml(…), ReadOnly(…) }</code>. The E4X operators
+  (<code>getproperty</code>/<code>getdescendants</code>/<code>for each</code>) dispatch through
+  <code>TObject</code> trait methods, so the new type receives the syntax via the existing path — the class
+  can live in any package.
+</p>
+<p>
+  <code>XMLReadOnly</code> <strong>does not extend</strong> <code>XML</code> (which is <code>final</code>): it
+  still reports <code>is XML == true</code> through a runtime <em>masquerade</em>, so framework code that
+  branches on <code>node is XML</code> keeps working. This is an AS3-level type-operator lie only — the Rust
+  downcast <code>as_xml_object()</code> stays <code>None</code>, so Ruffle internals still tell read-only nodes
+  apart (no mutation, no raw <code>E4XNode</code> access). The mutation API exists on the surface but is an
+  inert no-op, and no change notifications are ever emitted.
+</p>
+
+<figure>
+<svg viewBox="0 0 820 250" role="img" aria-labelledby="d5t d5d">
+  <title id="d5t">Polyglot XMLList dispatch</title>
+  <desc id="d5d">An E4X operator on XMLList matches on the E4XOrXml enum and routes to the XML path or the read-only helper.</desc>
+  <rect class="s-box" x="20" y="40" width="190" height="50" rx="6"/>
+  <text class="s-t" x="115" y="60" text-anchor="middle">E4X operator</text>
+  <text class="s-mono s-s" x="115" y="78" text-anchor="middle" font-size="10">.child · ..desc · @attr · .()</text>
+  <path class="s-arrow" d="M 210 65 L 270 65" marker-end="url(#a5)"/>
+  <defs><marker id="a5" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="var(--accent)"/></marker></defs>
+
+  <rect class="s-surf" x="270" y="30" width="200" height="70" rx="6"/>
+  <text class="s-h" x="370" y="52" text-anchor="middle">match E4XOrXml</text>
+  <text class="s-mono s-s" x="370" y="72" text-anchor="middle" font-size="10">Xml(node) | ReadOnly(node)</text>
+  <text class="s-mono s-s" x="370" y="88" text-anchor="middle" font-size="10">XmlListObject</text>
+
+  <path class="s-arrow" d="M 470 55 C 520 50, 540 45, 590 45" marker-end="url(#a5)"/>
+  <path class="s-arrow" d="M 470 80 C 520 95, 540 110, 590 110" marker-end="url(#a5)"/>
+  <rect class="s-box"  x="590" y="26" width="210" height="40" rx="6"/>
+  <text class="s-t" x="695" y="50" text-anchor="middle">existing E4X path (E4XNode)</text>
+  <rect class="s-hi"   x="590" y="90" width="210" height="44" rx="6"/>
+  <text class="s-t" x="695" y="110" text-anchor="middle">E4XNodeReadOnly helper</text>
+  <text class="s-s" x="695" y="126" text-anchor="middle">reads from the arena, 0 Gc allocs</text>
+
+  <rect class="s-good" x="270" y="160" width="280" height="44" rx="6"/>
+  <text class="s-h" x="410" y="180" text-anchor="middle">masquerade: is XML == true</text>
+  <text class="s-s" x="410" y="196" text-anchor="middle">no extends — frameworks see an XML</text>
+  <text class="s-s" x="20" y="186">Navigation → real XMLList</text>
+  <text class="s-s" x="20" y="202">→ is XMLList holds</text>
+  <text class="s-s" x="20" y="218">→ feeds list data providers</text>
+</svg>
+<figcaption>Zero regressions on the <code>XML</code> path: the read-only branch is additive, gated by the enum match.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="sortkeyed"><span class="n">7</span>Native <code>sortKeyed</code></h2>
+<p>
+  Read-only providers are commonly fed to data grids and list controls. A framework's column sort decorates
+  each row by reading E4X fields through the generic path, allocating a throwaway <code>XMLList</code> per
+  access; on large grids that comparison-time allocation dominates. <code>XMLReadOnly.sortKeyed(...)</code>
+  moves the whole sort into Rust:
+</p>
+<pre><code>public static native function sortKeyed(
+    items:Array, fields:Array, kinds:Array, descending:Array):Boolean;
+
+//  fields[j]:  ""=the node itself · "@n"=attribute n · "n"=child element n
+//  kinds[j] :  0=string · 1=numeric · 2=lowercased string
+//  → true once sorted; false if the rows aren't all XMLReadOnly (caller falls back)</code></pre>
+
+<figure>
+<svg viewBox="0 0 820 210" role="img" aria-labelledby="d6t d6d">
+  <title id="d6t">sortKeyed flow</title>
+  <desc id="d6d">From the framework sort into native Rust: extract key matrix, sort an index permutation, permute in place.</desc>
+  <g>
+    <rect class="s-box" x="20" y="30" width="160" height="50" rx="6"/>
+    <text class="s-t" x="100" y="52" text-anchor="middle">framework sort (AS3)</text>
+    <text class="s-s" x="100" y="70" text-anchor="middle">generic key comparator</text>
+    <path class="s-arrow" d="M 180 55 L 225 55" marker-end="url(#a6)"/>
+    <rect class="s-hi" x="225" y="30" width="180" height="50" rx="6"/>
+    <text class="s-t" x="315" y="52" text-anchor="middle">XMLReadOnly.sortKeyed</text>
+    <text class="s-s" x="315" y="70" text-anchor="middle">native (Rust)</text>
+  </g>
+  <defs><marker id="a6" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="var(--accent)"/></marker></defs>
+  <g>
+    <rect class="s-surf" x="120" y="115" width="180" height="46" rx="6"/>
+    <text class="s-t" x="210" y="135" text-anchor="middle">1 · extract key matrix</text>
+    <text class="s-s" x="210" y="151" text-anchor="middle">dense, from the arena (string/f64)</text>
+    <path class="s-arrow" d="M 300 138 L 335 138" marker-end="url(#a6)"/>
+    <rect class="s-surf" x="335" y="115" width="170" height="46" rx="6"/>
+    <text class="s-t" x="420" y="135" text-anchor="middle">2 · sort permutation</text>
+    <text class="s-s" x="420" y="151" text-anchor="middle">sort_unstable_by, 0 callbacks</text>
+    <path class="s-arrow" d="M 505 138 L 540 138" marker-end="url(#a6)"/>
+    <rect class="s-surf" x="540" y="115" width="180" height="46" rx="6"/>
+    <text class="s-t" x="630" y="135" text-anchor="middle">3 · permute in place</text>
+    <text class="s-s" x="630" y="151" text-anchor="middle">the original Array</text>
+  </g>
+  <text class="s-s" x="20" y="190">Adaptive fast paths: O(N) scan if already sorted · bucketing for low-cardinality columns.</text>
+</svg>
+<figcaption>Keys are pre-extracted as primitives → a pure-Rust comparator, no intermediate <code>XMLList</code> allocations.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="sorting"><span class="n">8</span>Memory dynamics under synchronous sorting</h2>
+<p>
+  Sorting a large provider through the framework's generic path reads each row's E4X fields, and every read
+  materializes a transient <code>XmlListObject</code> graph (a <code>Gc</code> allocation). During a
+  <strong>synchronous AS3 call the garbage collector cannot run</strong> — gc-arena needs
+  <code>&amp;mut Arena</code>, which is unavailable while AVM2 code is executing — so these transient objects
+  <strong>accumulate for the entire duration of the sort</strong>, a large temporary spike proportional to
+  rows × comparisons.
+</p>
+
+<figure>
+<svg viewBox="0 0 820 220" role="img" aria-labelledby="d7t d7d">
+  <title id="d7t">Transient heap during sorting</title>
+  <desc id="d7d">The generic sort produces a large transient spike of XmlListObject graphs; sortKeyed stays flat.</desc>
+  <!-- axes -->
+  <line x1="60" y1="40" x2="60" y2="180" class="s-line"/>
+  <line x1="60" y1="180" x2="790" y2="180" class="s-line"/>
+  <text class="s-s" x="50" y="48" text-anchor="end">heap</text>
+  <text class="s-s" x="120" y="196">load</text>
+  <text class="s-s" x="360" y="196">sort (synchronous)</text>
+  <text class="s-s" x="700" y="196">after</text>
+  <!-- generic sort spike (area) -->
+  <path class="s-warn" d="M 60 165 L 200 165 C 320 165, 320 55, 430 55 C 540 55, 560 165, 690 165 L 790 165 L 790 180 L 60 180 Z" fill-opacity="0.16"/>
+  <path d="M 60 165 L 200 165 C 320 165, 320 55, 430 55 C 540 55, 560 165, 690 165 L 790 165" fill="none" stroke="var(--warn)" stroke-width="2"/>
+  <text class="s-warn-f" x="430" y="48" text-anchor="middle" font-size="11">generic sort: transient XmlListObject spike</text>
+  <text class="s-s" x="430" y="100" text-anchor="middle">not collectable mid synchronous call</text>
+  <!-- sortKeyed flat -->
+  <line x1="60" y1="168" x2="790" y2="168" stroke="var(--good)" stroke-width="2" stroke-dasharray="6 4"/>
+  <text class="s-good-f" x="640" y="160" font-size="11">sortKeyed → no spike</text>
+</svg>
+<figcaption>Native <code>sortKeyed</code> removes the spike at the source: keys are extracted once and the sort allocates no per-access <code>XMLList</code>.</figcaption>
+</figure>
+
+<div class="note">
+  <span class="lbl">Takeaway</span>
+  The spike is a property of synchronous execution under an incremental collector, independent of the
+  underlying allocator. Two complementary levers reduce it: (1) sort natively via <code>sortKeyed</code>
+  (no per-access materialization); (2) on the caller side, extract sort keys once into a flat array so the
+  transient graphs are never built.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="wasm64"><span class="n">9</span>wasm64 &amp; encoding caps</h2>
+<p>
+  The <code>u32</code> references are <strong>logical</strong> indices, not addresses: crossing the 4&nbsp;GB
+  linear-memory boundary does not break indexing. The capacity limits come solely from the bit encoding:
+</p>
+<table>
+  <thead><tr><th>Field</th><th>Encoding</th><th class="num">Cap</th></tr></thead>
+  <tbody>
+    <tr><td>parent</td><td>29 bits in <code>kind_parent</code></td><td class="num">536M nodes (~15 GB)</td></tr>
+    <tr><td>node index</td><td>bit 31 = <code>VIRTUAL_TEXT</code>/<code>CHILD_FLAG</code></td><td class="num">&lt; 2³¹ nodes</td></tr>
+    <tr><td>string ref</td><td><code>chunk « 20</code> (12-bit chunk)</td><td class="num">2 GiB/store *</td></tr>
+  </tbody>
+</table>
+<p>
+  <small>* the chunk encoding would allow 4&nbsp;GiB/store, but the union narrows it to 2&nbsp;GiB: a value
+  reference in <code>value_or_child</code> must keep bit 31 clear ⇒ chunk&nbsp;&lt;&nbsp;2048.</small>
+</p>
+<p>
+  For the real workload (~250k rows → 5.5M nodes, ~20&nbsp;MB of strings) every cap is over 100× away: the
+  encoding is not a practical constraint.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="integration"><span class="n">10</span>Application integration</h2>
+<p>
+  The class is registered by Ruffle as top-level <code>("", "XMLReadOnly")</code> — it is not in the SDK
+  <code>playerglobal.swc</code>. The host references it <strong>dynamically</strong>, so no compile-time
+  declaration is needed:
+</p>
+<pre><code>var XMLReadOnlyClass:Class = getDefinitionByName("XMLReadOnly") as Class;
+var ro:* = new XMLReadOnlyClass(rawXmlString);
+if (obj is XMLReadOnlyClass) { /* … */ }</code></pre>
+<p>
+  The memory saving is realized by constructing <code>XMLReadOnly</code> directly from the data source's raw
+  string payload instead of materializing a mutable <code>XML</code> tree. Because the type masquerades as
+  <code>XML</code> (<code>is XML</code> true) yet stays immutable and emits no notifications, it slots into the
+  existing data-provider flows that expect <code>XML</code> while remaining read-only.
+</p>
+
+<h3>Decoding straight to XMLReadOnly (SOAP / WebService)</h3>
+<p>
+  The <code>getDefinitionByName</code> path above still constructs <code>XMLReadOnly</code> from a string you
+  already hold. The most effective integration pushes the conversion to the <em>earliest</em> point — the SOAP
+  decode — so a mutable tree is never built at all. The standard RPC stack has a <code>WebService</code> drive
+  a <code>SOAPDecoder</code> that turns the incoming envelope into mutable <code>XML</code> (or an object
+  graph). By <strong>subclassing both <code>WebService</code> and <code>SOAPDecoder</code></strong> and
+  overriding the decode step, the relevant response body is wrapped as <code>XMLReadOnly</code> directly from
+  the raw response XML, bypassing mutable E4X materialization entirely.
+</p>
+<p>
+  The win is twofold: the compact store is built <em>once</em>, at parse time, and the large transient mutable
+  tree — which the default decoder builds and then immediately discards — is never created, so even its
+  build-then-free peak disappears.
+</p>
+
+<p>A minimal sketch — a decoder that adds the format, a service that installs it, and the call site:</p>
+
+<p style="color:var(--text2); font-size:14px; margin-bottom:4px">1 · A <code>SOAPDecoder</code> subclass adding the <code>"e4xro"</code> format</p>
+<pre><code>import mx.rpc.soap.SOAPDecoder;
+import mx.rpc.soap.SOAPResult;
+import flash.utils.getDefinitionByName;
+
+// "e4xro": parse the whole SOAP envelope once into the compact read-only
+// arena (XMLReadOnly) instead of a heavy mutable XML tree. event.result
+// becomes the SOAP Body children — an XMLList of XMLReadOnly elements —
+// a drop-in for the stock "e4x" format.
+class ReadOnlySOAPDecoder extends SOAPDecoder {
+
+    private static var roClass:Class =
+        getDefinitionByName("XMLReadOnly") as Class;
+
+    override public function decodeResponse(response:*):SOAPResult {
+        // Anything other than "e4xro" decodes as usual.
+        if (resultFormat != "e4xro")
+            return super.decodeResponse(response);
+
+        var xml:String = (response is XML)
+            ? XML(response).toXMLString()
+            : String(response);
+
+        var ro:* = new roClass(xml);          // parse into the arena
+
+        var result:SOAPResult = new SOAPResult();
+        var body:* = ro.*::Body[0];           // SOAP Body, any namespace
+        var fault:* = body.*::Fault;          // SOAP Fault, any namespace
+        if (fault != null &amp;&amp; fault.length() &gt; 0) {
+            result.isFault = true;
+            result.result  = fault;
+        } else {
+            result.result  = body.children(); // like "e4x": Body children
+        }
+        return result;
+    }
+}</code></pre>
+
+<p style="color:var(--text2); font-size:14px; margin-bottom:4px">2 · A <code>WebService</code> subclass that installs the decoder on every operation</p>
+<pre><code>import mx.rpc.AbstractOperation;
+import mx.rpc.soap.mxml.Operation;
+import mx.rpc.soap.mxml.WebService;
+
+dynamic class ReadOnlyWebService extends WebService {
+    override public function getOperation(name:String):AbstractOperation {
+        var op:AbstractOperation = super.getOperation(name);
+        var soapOp:Operation = op as Operation;
+        if (soapOp != null &amp;&amp; !(soapOp.decoder is ReadOnlySOAPDecoder))
+            soapOp.decoder = new ReadOnlySOAPDecoder();
+        return op;
+    }
+}</code></pre>
+
+<p style="color:var(--text2); font-size:14px; margin-bottom:4px">3 · Opt in per operation</p>
+<pre><code>var ws:ReadOnlyWebService = new ReadOnlyWebService();
+ws.loadWSDL(wsdlUrl);
+
+var op:AbstractOperation = ws.getOperation("getRows");
+op.resultFormat = "e4xro";                    // read-only decoding
+op.addEventListener(ResultEvent.RESULT, onResult);
+op.send(args);
+
+// In onResult, event.result is an XMLList of XMLReadOnly elements,
+// ready to feed a list/grid data provider.</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="appendix-a"><span class="n">A</span>Appendix — changes to existing Ruffle sources</h2>
+<p>
+  Every modification to a pre-existing file. The read-only path is <em>additive</em>: existing <code>XML</code>
+  behavior is untouched, gated by an <code>as_xml_object_read_only()</code> downcast or an
+  <code>E4XOrXml</code> match.
+</p>
+<table>
+  <thead><tr><th>File</th><th>Change</th></tr></thead>
+  <tbody>
+    <tr><td><code>avm2.rs</code></td><td>declare the new module <code>mod e4x_read_only;</code></td></tr>
+    <tr><td><code>avm2/class.rs</code></td><td>add the <code>BuiltinType::Xml</code> variant and <code>Class::is_builtin_xml()</code>, so the read-only type can masquerade as <code>XML</code> for <code>is</code>/<code>as</code>/coerce without subclassing</td></tr>
+    <tr><td><code>avm2/globals.rs</code></td><td>register <code>XMLReadOnly</code> as a system class: add <code>xml_read_only</code> to <code>SystemClasses</code> and <code>SystemClassDefs</code>, wire it in <code>init_builtin_system_classes</code>/<code>…_class_defs</code> (<code>("", "XMLReadOnly")</code>), declare <code>mod xml_read_only;</code>, and mark the builtin <code>XML</code> class with <code>BuiltinType::Xml</code></td></tr>
+    <tr><td><code>avm2/globals/Toplevel.as</code></td><td><code>include "XMLReadOnly.as"</code></td></tr>
+    <tr><td><code>avm2/activation.rs</code></td><td>accept <code>xml_read_only</code> in the <code>is</code>/type-check op alongside <code>xml</code>/<code>xml_list</code>; accept read-only operands in the <code>+</code> (concatenation) op, which builds an <code>XMLList</code> via the read-only append fast path</td></tr>
+    <tr><td><code>avm2/value.rs</code></td><td>the masquerade core: <code>is_of_type</code> returns true for builtin <code>XML</code> when the object is read-only XML (AS3-level only; the Rust downcast stays <code>None</code>); coerce-to-type accepts read-only → <code>XML</code>; strict equality (<code>===</code>) compares read-only nodes by (arena, index) identity; loose equality (<code>==</code>) does deep / simple-content comparison; public-namespace property access includes read-only</td></tr>
+    <tr><td><code>avm2/object.rs</code></td><td>add the <code>XmlObjectReadOnly</code> variant to the <code>Object</code> and weak-object enums, re-export it and its allocator, and add the <code>as_xml_object_read_only()</code> downcast</td></tr>
+    <tr><td><code>avm2/e4x.rs</code></td><td>make <code>simple_content_to_string</code> polyglot via the <code>is_comment_or_pi()</code> / <code>xml_simple_string()</code> helpers (works for read-only children too)</td></tr>
+    <tr><td><code>avm2/globals/xml.rs</code></td><td><code>XML</code>'s <code>call_handler</code> returns a read-only object as-is (identity-stable) instead of copying it into a fresh mutable <code>XML</code></td></tr>
+    <tr><td><code>avm2/globals/xml_list.rs</code></td><td>make the list-level E4X method globals polyglot for read-only elements: <code>has_simple_content_inner</code>/<code>has_complex_content_inner</code>, <code>elements</code>, <code>child</code>, <code>children</code>, <code>contains</code>, <code>attribute</code>, <code>attributes</code>, <code>text</code>, <code>comments</code>, <code>parent</code>, <code>processing_instructions</code></td></tr>
+    <tr><td><code>avm2/object/xml_list_object.rs</code></td><td>introduce the <code>E4XOrXml::ReadOnly</code> element variant and its helpers (object accessor, element / comment-PI predicates, simple/complex-content, simple string, node identity), and make the <code>XmlListObject</code> trait methods polyglot: <code>get_property_local</code> (numeric + name loop), <code>get_enumerant_value</code>, <code>append</code> (read-only fast path), <code>set_property_local</code> (the <code>.()</code> filter fast path), <code>xml_descendants</code>, and equality</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="appendix-b"><span class="n">B</span>Appendix — new files</h2>
+<table>
+  <thead><tr><th>File</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr><td><code>avm2/e4x_read_only.rs</code></td><td>The read-only store core: <code>E4XStoreReadOnly</code> (chunked node + string arenas behind a single <code>Gc</code>), the 28-byte <code>E4XNodeDataReadOnly</code> record with kind/parent packing and the value/first-child union, the <code>E4XNodeReadOnly</code> handle (accessors, navigation, identity, serialization), the one-pass parser with single-child-text collapse, and the helpers backing <code>sortKeyed</code> (dense key extraction, child/attribute text concatenation).</td></tr>
+    <tr><td><code>avm2/object/xml_object_read_only.rs</code></td><td><code>XmlObjectReadOnly</code> — the AVM2 object wrapping a single read-only node, plus its allocator and weak handle. Navigation returns real <code>XmlListObject</code> values.</td></tr>
+    <tr><td><code>avm2/globals/xml_read_only.rs</code></td><td>Native implementations of the AS3 methods declared in <code>XMLReadOnly.as</code> (the read/navigation surface), plus the static <code>sortKeyed</code> fast path and its adaptive variants.</td></tr>
+    <tr><td><code>avm2/globals/XMLReadOnly.as</code></td><td>The playerglobal AS3 class declaration: constructor, <code>sortKeyed</code>, the AS3 method surface, and the prototype methods (with <code>setPropertyIsEnumerable</code> for correct <code>for each</code>/<code>for in</code> behavior).</td></tr>
+  </tbody>
+</table>
+
+<div class="footer">
+  Self-contained document — no external dependencies (all diagrams are inline SVG). Light/dark theme follows
+  <code>prefers-color-scheme</code>. Editable directly as a text file.
+</div>
+
+</div>
+</body>
+</html>

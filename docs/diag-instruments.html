@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="en" data-doc="diag-instruments">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diagnostic instruments for AVM2 memory leak investigation — Ruffle</title>
+<style>
+  :root{
+    --bg:#ffffff; --surface:#f6f6f4; --surface2:#efeee9;
+    --text:#1d1d1b; --text2:#5f5e5a;
+    --border:#d3d1c7; --border2:#b4b2a9;
+    --accent:#534ab7; --accent-soft:#7f77dd;
+    --good:#1d9e75; --warn:#d85a30; --info:#378add;
+    --code-bg:#f1efe8;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#1a1a18; --surface:#242420; --surface2:#2c2c28;
+      --text:#ecece9; --text2:#b4b2a9;
+      --border:#444441; --border2:#5f5e5a;
+      --accent:#afa9ec; --accent-soft:#7f77dd;
+      --good:#5dcaa5; --warn:#f0997b; --info:#85b7eb;
+      --code-bg:#26261f;
+    }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:16px; line-height:1.65;
+  }
+  .wrap{max-width:900px; margin:0 auto; padding:48px 28px 96px}
+  header.doc{border-bottom:1px solid var(--border); padding-bottom:24px; margin-bottom:8px}
+  header.doc h1{font-size:29px; margin:0 0 6px; letter-spacing:-.01em}
+  header.doc .sub{color:var(--text2); font-size:15px}
+  header.doc dl{display:grid; grid-template-columns:max-content 1fr; gap:2px 16px; margin:18px 0 0; font-size:13px}
+  header.doc dt{color:var(--text2); text-transform:uppercase; letter-spacing:.05em; font-size:11px; padding-top:2px}
+  header.doc dd{margin:0}
+  header.doc code{font-size:12px}
+  h2{font-size:23px; margin:52px 0 4px; letter-spacing:-.01em; scroll-margin-top:20px; padding-bottom:4px; border-bottom:1px solid var(--border)}
+  h3{font-size:17px; margin:30px 0 4px; scroll-margin-top:20px}
+  h3 code{font-size:.92em}
+  h4{font-size:14.5px; margin:22px 0 2px; color:var(--text)}
+  p{margin:12px 0}
+  a{color:var(--accent)}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.85em;
+    background:var(--code-bg); padding:.12em .4em; border-radius:4px}
+  pre{background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+    padding:14px 16px; overflow:auto; font-size:12.5px; line-height:1.5}
+  pre code{background:none; padding:0; font-size:inherit; white-space:pre}
+  ul,ol{padding-left:22px} li{margin:6px 0}
+  nav.toc{background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:18px 22px; margin:28px 0 8px}
+  nav.toc strong{display:block; font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--text2); margin-bottom:8px}
+  nav.toc ul{margin:0; columns:2; column-gap:32px; font-size:14px; list-style:none; padding-left:0}
+  nav.toc ul ul{columns:1; padding-left:14px; margin:2px 0}
+  nav.toc li{margin:3px 0}
+  nav.toc a{text-decoration:none; color:var(--text)}
+  nav.toc a:hover{color:var(--accent)}
+  .note{border-left:3px solid var(--accent); background:var(--surface);
+    padding:12px 16px; border-radius:0 8px 8px 0; margin:18px 0; font-size:15px}
+  .note.warn{border-color:var(--warn)}
+  .note .lbl{font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--text2); display:block; margin-bottom:2px}
+  table{width:100%; border-collapse:collapse; margin:18px 0; font-size:13.5px}
+  th,td{text-align:left; padding:8px 11px; border-bottom:1px solid var(--border); vertical-align:top}
+  th{font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--text2);
+    border-bottom:2px solid var(--border2)}
+  td code{white-space:nowrap}
+  hr{border:none; border-top:1px solid var(--border); margin:36px 0 0}
+  .footer{margin-top:48px; padding-top:20px; border-top:1px solid var(--border);
+    color:var(--text2); font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <h1>Diagnostic instruments for AVM2 memory leak investigation</h1>
+  <div class="sub">Retention and leak instrumentation for long-running AVM2 workloads.</div>
+  <dl>
+    <dt>Project</dt><dd>Ruffle — Flash Player emulator (Rust + WebAssembly)</dd>
+    <dt>Branch</dt><dd><code>diag-instruments</code> (on top of <code>fix-memory-leaks</code>)</dd>
+    <dt>Status</dt><dd>Investigation artifact — <strong>not</strong> intended for upstream PR; every change is gated as <code>DIAGNOSTIC</code> with explicit removal notes</dd>
+  </dl>
+</header>
+
+<p style="margin-top:22px">
+  This document describes the diagnostic instrumentation added on the <code>diag-instruments</code> branch. The
+  instruments exist to investigate retention and leak patterns on long-running AVM2 workloads — they are
+  <strong>not</strong> intended for upstream PR, and every change is gated as <code>DIAGNOSTIC</code> with
+  explicit removal notes.
+</p>
+<p>
+  The investigation problem they were designed to answer is: <em>"on a long session of an AVM2 application, why
+  does memory plateau drift upward across load/unload cycles even when the display tree is bounded?"</em>. The
+  Ruffle profiler shows raw allocation totals, but does not answer the domain question — which AS3 classes are
+  alive, which objects are pinned by what, which dispatchers accumulate listeners that nobody removes. The
+  instruments below close that gap.
+</p>
+<p>The end-to-end workflow they enable is:</p>
+<ol>
+  <li>Run the application normally; trigger AS3 <code>System.gc()</code> between reloads or on demand.</li>
+  <li>From the browser DevTools console invoke <code>window.dumpRuffle()</code> (or from AS3
+    <code>ExternalInterface.call("dumpRuffle")</code>) to flush a snapshot of every counter as
+    <code>tracing::warn!</code> lines on <code>target: "ruffle_diag"</code>.</li>
+  <li>When a specific class is suspected of being retained, invoke
+    <code>window.dumpRetentionPath("pkg::Class")</code> to print every strong reference chain that reaches a
+    live instance of it from a GC root.</li>
+  <li>Compare snapshots taken at different points of the session.</li>
+</ol>
+<p>
+  The signal you are looking for is rarely growth in the raw totals; it is <em>differential</em> monotonic
+  growth in counts that should be bounded by the application's reload cycle.
+</p>
+
+<nav class="toc" aria-label="Contents">
+  <strong>Contents</strong>
+  <ul>
+    <li><a href="#principles">Design principles</a></li>
+    <li><a href="#overview">Module overview</a></li>
+    <li><a href="#sidecar">Sidecar pattern</a></li>
+    <li><a href="#counters">Counter modules</a>
+      <ul>
+        <li><a href="#diag_listeners">diag_listeners</a></li>
+        <li><a href="#diag_alive">diag_alive</a></li>
+        <li><a href="#diag_dispatch">diag_dispatch</a></li>
+        <li><a href="#diag_roots">diag_roots</a></li>
+        <li><a href="#diag_xref">diag_xref</a></li>
+        <li><a href="#diag_unbound_caller">diag_unbound_caller</a></li>
+      </ul>
+    </li>
+    <li><a href="#trigger">Trigger mechanism</a></li>
+    <li><a href="#walker">Retention-path walker</a></li>
+    <li><a href="#accessors">Read-only accessors</a></li>
+    <li><a href="#js">JS-side surface</a></li>
+    <li><a href="#output">Output format reference</a></li>
+    <li><a href="#hooks">Instrumentation hooks</a></li>
+    <li><a href="#removal">Removal checklist</a></li>
+    <li><a href="#caveats">Caveats and limitations</a></li>
+  </ul>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="principles">Design principles</h2>
+<p>All instruments adhere to a small set of shared principles. These are not incidental — each was the answer to a concrete failure mode encountered during the investigation.</p>
+<ol>
+  <li><strong><code>DIAGNOSTIC:</code> comment prefix.</strong> Every modification — module, struct, field,
+    function, comment block — begins with <code>DIAGNOSTIC:</code> and ends with an explicit "remove before the
+    upstream PR" hint. This makes bulk cleanup mechanical: a single grep finds every site to revert.</li>
+  <li><strong>No mutation of observable AVM2 state.</strong> Counters and accessors are read-only. Triggers are
+    atomics or mutex-guarded slots. Snapshots never call into AS3 (<code>Script::init()</code> is read for its
+    already-stored globals, never <code>Script::globals()</code> which would lazily run the script
+    initializer). The walker never mutates any object.</li>
+  <li><strong>Drop-based bookkeeping.</strong> Counters that need balance (alive instances, dispatch-list size)
+    cannot rely on AS3 calling <code>remove</code> symmetrically — applications routinely leak listeners.
+    Instead, a <code>Gc&lt;Sidecar&gt;</code> allocated alongside <code>ScriptObjectData</code> runs its
+    <code>Drop</code> when gc-arena collects the parent, and the <code>Drop</code> decrements the counter. This
+    guarantees <code>alive = created − dropped</code> without instrumenting any AS3 code path.</li>
+  <li><strong>Decoupled from <code>force_full_gc</code>.</strong> Applications routinely call
+    <code>flash.system.System.gc()</code> from many sites — cleanup paths, finalizers, navigation events.
+    Triggering dumps from inside the <code>force_full_gc</code> block would flood the log. Instead, the dump
+    trigger is an explicit <code>window.dumpRuffle()</code> call from JS; the host decides cadence.</li>
+  <li><strong>Semantic edge labels, not pointer graphs.</strong> <code>gc-arena</code> exposes no generic heap
+    visitor (<code>Collect::trace</code> takes an opaque context). The walker performs a <em>semantic</em> walk:
+    per-type strong-edge extraction with human-readable labels (<code>slot#N</code>, <code>dyn:propName</code>,
+    <code>__proto__</code>, <code>loader-info.root</code>, …). Output is a directly-readable chain
+    <code>root → … → instance</code> rather than a pointer dump.</li>
+  <li><strong><code>tracing::warn!</code> on <code>target: "ruffle_diag"</code>.</strong> All dumps emit
+    warn-level lines on a dedicated tracing target so they appear in the browser console without requiring
+    trace-level subscription, and filter cleanly from the noisier <code>WARN</code> lines elsewhere.</li>
+</ol>
+
+<!-- ============================================================ -->
+<h2 id="overview">Module overview</h2>
+<p>The branch adds the following modules to <code>core/src/</code>:</p>
+<table>
+  <thead><tr><th>Module</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><code>diag_listeners</code></td><td>Per-(dispatcher class, event type) add/remove churn counter</td></tr>
+    <tr><td><code>diag_alive</code></td><td>Per-AVM2-class alive instance counter</td></tr>
+    <tr><td><code>diag_dispatch</code></td><td>Per-receiver dispatch-list size tracker with delta</td></tr>
+    <tr><td><code>diag_roots</code></td><td>Listener-target walk of permanent dispatchers</td></tr>
+    <tr><td><code>diag_xref</code></td><td>Cross-class strong-listener retention pair counter</td></tr>
+    <tr><td><code>diag_unbound_caller</code></td><td>AS3 caller class for unbound strong Stage listeners</td></tr>
+    <tr><td><code>diag_request</code></td><td>Trigger flags consumed by <code>Player::update</code></td></tr>
+    <tr><td><code>avm2::diag_retention</code></td><td>BFS retention-path walker from AVM2 GC roots</td></tr>
+  </tbody>
+</table>
+<p>JS-side surface in <code>web/src/lib.rs</code>:</p>
+<table>
+  <thead><tr><th>JS function</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>window.dumpRuffle()</code></td><td>Flush all counter snapshots on next frame</td></tr>
+    <tr><td><code>window.dumpRetentionPath("pkg::Class")</code></td><td>Run BFS retention-path walk on next frame</td></tr>
+  </tbody>
+</table>
+<p>
+  Read-only <code>diag_*</code> accessor methods are added on: <code>Domain</code>, <code>Script</code>,
+  <code>CallStack</code>, <code>ScriptObjectData</code>, <code>ClassObject</code>, <code>DictionaryObject</code>,
+  <code>FunctionObject</code>, <code>LoaderInfoObject</code>, <code>ExternalInterface</code>, <code>Timer</code>.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="sidecar">Sidecar pattern: <code>AliveTracker</code> and <code>DispatchSidecar</code></h2>
+<p>
+  The hardest counters to keep balanced are the per-instance counters: <em>alive count per class</em> and
+  <em>dispatch-list size per receiver</em>. Both must fire a decrement when the parent object dies, but there is
+  no AVM2 hook "object collected" — <code>gc-arena</code> does not call user code on collection unless an
+  object's <code>Drop</code> is registered. The solution is the <strong>sidecar</strong> pattern.
+</p>
+
+<h3>What it is</h3>
+<p>Inside <code>ScriptObjectData</code> (the data common to every <code>TObject</code> implementation) we embed two extra fields:</p>
+<pre><code>struct ScriptObjectData&lt;'gc&gt; {
+    // … all existing fields …
+
+    /// DIAGNOSTIC: alive counter sidecar.
+    _alive_tracker: Gc&lt;'gc, AliveTracker&gt;,
+
+    /// DIAGNOSTIC: dispatch-list bookkeeping sidecar.
+    dispatch_sidecar: Gc&lt;'gc, DispatchSidecar&gt;,
+}</code></pre>
+<p>Each sidecar is a separately allocated <code>Gc&lt;...&gt;</code> whose <strong>sole owner</strong> is the parent <code>ScriptObjectData</code>. When the parent is collected, the sidecar becomes unreachable, gc-arena calls <code>Drop</code> on it, and the <code>Drop</code> runs our decrement.</p>
+
+<h3>Why a separate <code>Gc</code> allocation and not a field with <code>Drop</code></h3>
+<p><code>gc-arena</code> requires <code>Drop</code>-bearing types to be <code>#[collect(require_static)]</code>, which forbids them from holding any GC handle. <code>ScriptObjectData</code> itself holds many GC handles, so it cannot implement <code>Drop</code> directly. By extracting the drop responsibility into a separately-allocated <code>Gc&lt;Static&gt;</code>, we get:</p>
+<ul>
+  <li><code>AliveTracker</code> and <code>DispatchSidecar</code> are <code>#[collect(require_static)]</code> and
+    contain only <code>String</code> / <code>HashMap&lt;String, u32&gt;</code> — no GC handles.</li>
+  <li>They live in their own <code>Gc</code> allocations; gc-arena calls their <code>Drop</code> on collection.</li>
+  <li>They share their parent's lifetime exactly: 1:1 ownership, parent drops → sidecar drops.</li>
+</ul>
+
+<h3><code>AliveTracker</code></h3>
+<p>Records the death of an AVM2 instance. Created in <code>ScriptObjectData::new</code> and <code>custom_new</code> with the parent's class name; on <code>Drop</code> it calls <code>diag_alive::record_drop(&amp;self.class_name)</code>.</p>
+
+<h3><code>DispatchSidecar</code></h3>
+<p>A more elaborate sidecar that maintains a per-event-type counter of how many listeners are still attached to the parent (snapshot, not pointers). The hooks in <code>event_dispatcher::add_event_listener</code> and <code>remove_event_listener</code> keep this counter in sync. On <code>Drop</code>, <code>DispatchSidecar</code>:</p>
+<ol>
+  <li>Calls <code>diag_dispatch::record_drop</code> once for the parent receiver, so the per-receiver entry is
+    removed from the tracker.</li>
+  <li>For every <code>(event_type, count)</code> still attached at collection time, calls
+    <code>diag_listeners::record_remove_str</code> <code>count</code> times.</li>
+</ol>
+<p>
+  The second step is what corrects the otherwise-asymmetric <code>add</code>/<code>remove</code> counts in
+  <code>diag_listeners</code> and <code>diag_dispatch</code>: if an application registers a listener and never
+  removes it but the dispatcher itself eventually dies, the sidecar fires the symmetric removes at GC time, and
+  the <code>alive = adds − removes</code> accounting balances. Without this, both telemetries are add-only and
+  overcount alive listeners on high-churn but balanced workloads (e.g. components that recreate sub-component
+  listeners on every rebuild).
+</p>
+
+<h3>Stable receiver identity</h3>
+<p>
+  <code>DispatchSidecar</code> is also used as the <strong>stable identity</strong> of its parent in
+  <code>diag_dispatch</code>'s <code>HashMap&lt;(ptr, class_name), …&gt;</code>. The pointer returned by
+  <code>receiver_id()</code> is <code>self as *const _ as usize</code>, which is stable for the entire lifetime
+  of the parent (because the sidecar allocation is owned exclusively by the parent and outlives no longer than
+  it does). This avoids two well-known traps:
+</p>
+<ul>
+  <li>Using a <code>*const ScriptObjectData</code> directly would not provide pointer stability across
+    <code>Gc::write</code> operations.</li>
+  <li>Using a freshly-derived pointer at <code>add_event_listener</code> time would not match the pointer used by
+    the <code>Drop</code> (which only sees the sidecar).</li>
+</ul>
+<p>The sidecar pointer is stable, GC-safe, and equivalent on both sides.</p>
+
+<h3>Signature change propagation</h3>
+<p>
+  Because <code>ScriptObjectData::new</code> now also takes the gc <code>Mutation</code> (to allocate the
+  sidecars), the signature change has to propagate to every <code>TObject</code> implementation that constructs
+  a <code>ScriptObjectData</code>. This touches ~30 files under <code>core/src/avm2/object/</code> — the
+  substantive change in each is just <code>ScriptObjectData::new(class)</code> →
+  <code>ScriptObjectData::new(class, mc)</code>. This is the bulk of the line-count delta on the branch and is
+  mechanical.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="counters">Counter modules</h2>
+<p>Each counter module follows the same skeleton:</p>
+<ul>
+  <li><code>OnceLock&lt;Mutex&lt;HashMap&lt;Key, Counter&gt;&gt;&gt;</code> for thread-safe lazy init.</li>
+  <li><code>record_add</code> / <code>record_remove</code> (or <code>record_create</code> /
+    <code>record_drop</code>) for hook calls.</li>
+  <li><code>dump_snapshot(top_n)</code> returning a one-line <code>String</code> for tracing.</li>
+  <li>A previous-snapshot side table for delta computation across dumps.</li>
+</ul>
+<p>The modules differ in their <code>Key</code> and what they aggregate.</p>
+
+<h3 id="diag_listeners"><code>diag_listeners</code></h3>
+<p><strong>Purpose.</strong> See "alive listener" growth even when the AS3 display tree is bounded and AS3-side counters are flat — non-bubbling events from listeners on internal instances are invisible to stage-level counters.</p>
+<p><strong>Key:</strong> <code>(class_name: AvmString, event_type: AvmString)</code>.<br>
+   <strong>Value:</strong> <code>{ adds: u64, removes: u64 }</code>. Alive = <code>adds − removes</code>.</p>
+<p><strong>Hooks:</strong> <code>event_dispatcher::add_event_listener</code> → <code>record_add</code>;
+   <code>event_dispatcher::remove_event_listener</code> → <code>record_remove</code>;
+   <code>DispatchSidecar::drop</code> → <code>record_remove_str</code> for every still-attached listener (the
+   balancing pass).</p>
+<p><strong>Output:</strong> one line per dump.<br>
+  <code>RuffleListenerReg distinct_pairs=N total_adds=N total_removes=N net=N top_alive=[…] top_churn=[…]</code></p>
+<ul>
+  <li><code>distinct_pairs</code> is the number of unique <code>(class, event)</code> keys observed</li>
+  <li><code>top_alive</code> is the top-N keys by current alive count, with the explicit
+    <code>+adds/-removes(alive N)</code> breakdown</li>
+  <li><code>top_churn</code> is the top-N keys by <code>adds + removes</code> — useful to spot high-churn paths
+    that are nonetheless balanced</li>
+</ul>
+
+<h3 id="diag_alive"><code>diag_alive</code></h3>
+<p><strong>Purpose.</strong> Spot zombie objects: AVM2 instances that are alive in memory but not reachable through the display tree. The discrepancy between alive and on-display counts is a direct measure of leak volume per class.</p>
+<p><strong>Key:</strong> <code>String</code> — the qualified class name (<code>pkg::Local</code>).<br>
+   <strong>Value:</strong> <code>{ created: u64, alive: i64 }</code>. <code>i64</code> is intentional so an
+   underflow is detectable (it would indicate a tracking bug).</p>
+<p><strong>Hooks:</strong> <code>ScriptObjectData::new</code> and <code>custom_new</code> →
+   <code>diag_alive::record_create(class_name)</code>. <code>AliveTracker::drop</code> (sidecar) →
+   <code>diag_alive::record_drop(class_name)</code>.</p>
+<p><strong>Output:</strong><br>
+  <code>RuffleLiveAS3 distinct=N total_alive=N total_created=N top_alive=[Class=N(of M), …]</code></p>
+<p><code>Class=N(of M)</code> means <code>N</code> instances are currently alive out of <code>M</code> ever created. The ratio is informative: a class with <code>N/M</code> close to 1 is leaking; close to 0 indicates a transient class with normal churn.</p>
+<p><strong>Convenience accessor.</strong> <code>alive_count_for(class_name)</code> is used by the retention-path walker as a completeness check. It looks up by exact qualified name first; if missing, falls back to summing all entries whose key ends with <code>::&lt;class_name&gt;</code>, so callers can pass a bare local name without qualification.</p>
+
+<h3 id="diag_dispatch"><code>diag_dispatch</code></h3>
+<p><strong>Purpose.</strong> Detect dispatch lists whose size grows reload-after-reload — the typical indicator of a long-lived receiver that accumulates listeners no one removes.</p>
+<p><strong>Key:</strong> <code>(receiver_ptr: usize, class_name: String)</code>.<br>
+   <strong>Value:</strong> <code>{ last_len: usize }</code> — last observed total length of that receiver's
+   dispatch list across all event types and priorities.</p>
+<p>The receiver pointer can be reused by the allocator after a receiver is GC'd. This is acceptable noise: the per-class aggregation at dump time washes it out, and <code>DispatchSidecar::drop</code> calls <code>record_drop</code> <em>before</em> the pointer can be reused (because the sidecar <code>Drop</code> runs during GC, and the freed allocation cannot be handed out until after the sweep completes).</p>
+<p><strong>Hooks:</strong> <code>event_dispatcher::add_event_listener</code> →
+   <code>diag_dispatch::record_add(receiver_id, class_name, post_add_total_len)</code>;
+   <code>DispatchSidecar::drop</code> → <code>record_drop</code>.</p>
+<p><strong>Output:</strong> TWO lines per dump.</p>
+<p>Line 1 — broad top-N:<br>
+  <code>RuffleDispatchListSize receivers=N max_len=M top_class=[Class max=N(+Δ) avg=N count=N, …]</code></p>
+<p>Line 2 — singleton-filtered, sorted by delta DESC:<br>
+  <code>RuffleDispatchListSize_Singletons receivers_count&lt;=5=N top=[Class max=N(+Δ) count=N, …]</code></p>
+<p>The second line is critical. Many large no-leak classes (e.g. the Stage itself, generic <code>EventDispatcher</code>) dominate the broad top by absolute size, hiding small but monotonically-growing singleton leaks (e.g. a manager singleton accumulating a handful of listeners per reload). By filtering to <code>count &lt;= 5</code> (true and quasi-singletons) and sorting by delta DESC, the second line surfaces those leaks immediately.</p>
+
+<h3 id="diag_roots"><code>diag_roots</code></h3>
+<p><strong>Purpose.</strong> Name the AVM2 classes whose instances a permanent dispatcher (e.g. the Stage) keeps alive through its listeners.</p>
+<p><strong>Inputs:</strong> an <code>Object&lt;'gc&gt;</code> known to be a permanent dispatcher.<br>
+   <strong>Output:</strong> one <code>RuffleRootListeners</code> warn line per dispatcher.</p>
+<p>For each handler in the dispatcher's dispatch list (<code>DispatchList::diag_handler_targets</code>):</p>
+<ul>
+  <li>Determine strong vs weak (<code>HandlerRef::Weak</code> stores a <code>GcWeak</code>).</li>
+  <li>For weak entries, <code>upgrade()</code> is attempted; failures are skipped (the listener is dead).</li>
+  <li>For surviving entries, extract the <code>bound_receiver</code> of the handler function via
+    <code>FunctionObject::executable().diag_bound_receiver()</code>.</li>
+  <li>Aggregate by <code>(receiver_class, is_weak)</code>.</li>
+</ul>
+<p><strong>Output:</strong><br>
+  <code>RuffleRootListeners &lt;label&gt; total=N strong=M weak=K top=[Class(S)=N, Class(w)=N, …]</code></p>
+<p><code>(S)</code> is a strong reference (the dispatcher pins the receiver via the listener); <code>(w)</code> is weak (does NOT pin). When investigating an orphan object whose retention root is unknown, scan the <code>(S)</code> entries for any class belonging to the orphan's expected sub-graph — that names the retention edge. <code>(w)</code> entries are shown for completeness, but understanding that they cannot retain is the whole point: this turns "a listener exists" into "a listener that <em>retains</em>" by reading the parenthesized tag.</p>
+<p><code>diag_roots</code> is called twice per dump from <code>Player::dump_root_listeners_diag</code>: once for the Stage, once for the root content of the running movie.</p>
+
+<h3 id="diag_xref"><code>diag_xref</code></h3>
+<p><strong>Purpose.</strong> Catch retention via a strong listener registered on an arbitrary (not necessarily permanent) dispatcher, where the handler's bound receiver is of a <em>different</em> class. This is the classic "long-lived singleton holds bound methods of short-lived components" pattern.</p>
+<p><strong>Key:</strong> <code>(dispatcher_class: String, receiver_class: String)</code>.<br>
+   <strong>Value:</strong> <code>i64</code> — count, decremented on remove (floored at 0).</p>
+<p><strong>Hooks:</strong> <code>event_dispatcher::add_event_listener</code> →
+   <code>diag_xref::record_add(dispatcher_class, receiver_class)</code>;
+   <code>event_dispatcher::remove_event_listener</code> →
+   <code>diag_xref::record_remove(dispatcher_class, receiver_class)</code>.</p>
+<p>The hook in <code>add_event_listener</code> only fires when the listener is STRONG AND the bound receiver class differs from the dispatcher class. Weak listeners cannot retain, so they are irrelevant. Same-class self-registration is filtered out as noise (a component listening to itself does not indicate retention through a foreign edge).</p>
+<p><strong>Accuracy note.</strong> <code>removeEventListener</code> does not tell us whether the original registration was weak or strong. We decrement on every bound-method remove but floor at 0. This adds harmless noise to pairs that were correctly cleaned up; it never affects the leak signal, which is a strong listener that is <em>never</em> removed (so its counter only ever grows).</p>
+<p><strong>Output:</strong><br>
+  <code>RuffleXref pairs=N top=[Dispatcher-&gt;Receiver=N(+Δ), …]</code></p>
+<p>Direction note: <code>Dispatcher → Receiver = N</code> means the <strong>dispatcher</strong> class retains <code>N</code> instances of the <strong>receiver</strong> class via listeners. Reading the direction correctly is essential: a pair <code>Component → FocusManager</code> means the component retains the FocusManager (innocuous, since FocusManager is permanent); the inverse pair, if it grew, would be the leak indicator.</p>
+
+<h3 id="diag_unbound_caller"><code>diag_unbound_caller</code></h3>
+<p><strong>Purpose.</strong> When <code>diag_roots</code> flags <code>&lt;unbound&gt;(S)=N</code> strong listeners on the Stage (anonymous closures registered as <code>stage.addEventListener("X", function(e){})</code>), this instrument names the AS3 class containing the call site that registered them.</p>
+<p>Why this matters: the unbound closure captures local scope, the strong listener keeps the closure alive, the captured scope keeps the surrounding instance alive. Anonymous closures on Stage are a common retention edge but <code>diag_roots</code> cannot say <em>who</em> registered them.</p>
+<p><strong>Key:</strong> <code>String</code> — the qualified caller class name.<br>
+   <strong>Value:</strong> <code>i64</code> — count of <code>addEventListener</code> calls observed.</p>
+<p><strong>Hook.</strong> In <code>event_dispatcher::add_event_listener</code>, when ALL of:</p>
+<ul>
+  <li><code>use_weak_reference == false</code> (strong),</li>
+  <li><code>listener.executable().diag_bound_receiver().is_none()</code> (unbound closure, not a bound method),</li>
+  <li><code>this.instance_of_class_name() == "flash.display::Stage"</code>,</li>
+</ul>
+<p>we walk back the AVM2 call stack via <code>Avm2::call_stack().borrow().frames()</code> looking for the first frame whose method has a bound class. That class is the AS3 caller — the code path installing the closure — and we record it.</p>
+<p><strong>Output:</strong><br>
+  <code>RuffleUnboundStageCaller distinct=N top=[Class=N(+Δ), …]</code></p>
+
+<!-- ============================================================ -->
+<h2 id="trigger">Trigger mechanism: <code>diag_request</code></h2>
+<p>Both dump types are triggered by external requests from the JS host, not by internal events. The <code>diag_request</code> module holds the cross-thread shared state.</p>
+<pre><code>static DUMP_REQUESTED: AtomicBool = AtomicBool::new(false);
+static RETENTION_REQUESTED: Mutex&lt;Option&lt;String&gt;&gt; = Mutex::new(None);</code></pre>
+<p><strong>Dump request.</strong> <code>request_dump_ruffle()</code> (called from the JS-installed closure) sets the boolean to <code>true</code>. At the end of <code>Player::update</code>, <code>take_dump_request()</code> atomically reads-and-clears it; if <code>true</code>, the update calls <code>dump_perf_diag</code> and <code>dump_root_listeners_diag</code>.</p>
+<p><strong>Retention-path request.</strong> <code>request_retention_dump(class_name)</code> stores the target class name in the mutex. <code>take_retention_request()</code> takes it out at the end of <code>Player::update</code>; if present, the update calls <code>avm2::diag_retention::dump_retention_paths</code>.</p>
+<p>The atomic boolean is enough for the dump request because it is parameterless. The retention request carries a class name, so it requires the mutex slot.</p>
+<p><strong>Why decoupled from <code>force_full_gc</code>.</strong> Earlier iterations triggered dumps inside the <code>force_full_gc</code> block (gated on AS3 <code>System.gc()</code>). Many applications call <code>System.gc()</code> from multiple sites per reload cycle, which flooded the log and made it impossible to distinguish a single observation point from the next. Decoupling moves the cadence decision to the JS host: invoke <code>window.dumpRuffle()</code> exactly when observation is wanted, and nothing fires otherwise.</p>
+
+<!-- ============================================================ -->
+<h2 id="walker">Retention-path walker: <code>avm2::diag_retention</code></h2>
+<p>This is the largest single instrument on the branch (~600 lines) and the most useful when the question is <em>"who is keeping this orphan instance alive?"</em>.</p>
+
+<h3>Overall design</h3>
+<p>Given an AS3 class (qualified <code>pkg::Local</code>, or a bare local name), the walker does a <strong>breadth-first forward traversal</strong> of the AVM2 object graph starting from every enumerable GC root, following only <strong>strong semantic edges</strong>, and records every in-edge that reaches an instance of the target class.</p>
+<p>For each match it prints the chain <code>root → … → instance</code> with per-hop labels and source classes. The BFS does NOT early-exit at the first match — it completes the whole reachable graph and records every in-edge into every target instance, so multiple independent retainers appear in a single run.</p>
+
+<h3>Why a semantic walk, not a pointer trace</h3>
+<p><code>gc-arena</code>'s <code>Collect::trace</code> takes an opaque <code>&amp;Collection</code> context; it is designed for the collector itself, not for external observers, and cannot be re-purposed as a generic heap visitor. A pointer-level visitor would also produce nameless output ("root → 0x1234 → 0x5678 → target") that requires post-processing. The walker instead enumerates strong edges <strong>per type</strong>, with human-readable labels (<code>slot#5</code>, <code>dyn:foo</code>, <code>__proto__</code>, <code>bound-method#3</code>, …). The output reads like a call chain, not a pointer dump.</p>
+
+<h3>Roots enumerated</h3>
+<pre><code>1. Stage display tree                       (root[stage])
+2. ClassObject statics across all domains    (root[class:Name])
+2b. Script global objects                    (root[script:Name])
+3. Active Timer callbacks + parameters       (root[timer#N])
+4. ExternalInterface.addCallback             (root[extcallback:'name'])
+5. Player-held display object pointers       (root[mouse-hovered], etc.)
+   - mouse_hovered, mouse_pressed, mouse_right_pressed, mouse_middle_pressed
+   - drag_object
+   - focus_tracker</code></pre>
+<p><strong>Domains.</strong> Starts from <code>Avm2::playerglobals_domain()</code> and walks the <code>Domain::children</code> tree via <code>Domain::diag_children</code>. The <code>DomainData::children</code> field is normally gated behind <code>#[cfg(feature = "egui")]</code>; the diagnostic exposes it ungated so the walker can sweep movie/application domains in regular non-egui builds. For each domain, all <code>(name, _ns, class)</code> triples from <code>Domain::classes()</code> are seeded, and every <code>ClassObject</code> registered on each class is added as a root with label <code>root[class:Name]</code>.</p>
+<p><strong>Script globals.</strong> Each <code>package { … }</code> block in AS3 produces a top-level <code>Script</code> whose globals are a regular <code>Object&lt;'gc&gt;</code>. A <code>public var X = new ...</code> declared at package level (not <code>static</code> inside a class) lives as a slot on the script global, not on a ClassObject. Without enumerating these, the walker would miss every cache stored in a package-level var — a common application-level leak pattern. The walker reads each <code>script.init()</code> (which returns <code>(Method, Object, Domain)</code> from the cached data without forcing lazy init) and adds the returned global as <code>root[script:Name]</code>.</p>
+<p><strong><code>Script::init()</code> vs <code>Script::globals()</code>.</strong> Diagnostics must NEVER mutate AVM2 state. <code>Script::globals()</code> runs the script's initializer on the spot if it has not run yet; <code>Script::init()</code> only returns the already-stored globals object (the slot is created when the script is loaded, before its initializer runs). The walker uses the latter.</p>
+
+<h3>Strong edges enumerated</h3>
+<p>For every visited <code>Object&lt;'gc&gt;</code>, <code>for_each_edge</code> enumerates:</p>
+<table>
+  <thead><tr><th>Edge label</th><th>Source</th></tr></thead>
+  <tbody>
+    <tr><td><code>__proto__</code></td><td><code>ScriptObjectData::proto()</code></td></tr>
+    <tr><td><code>slot#N:&lt;traitName&gt;</code> (or <code>slot#N</code>)</td><td><code>ScriptObjectData::get_slot(N)</code> for <code>0..diag_slots_len()</code>. Trait name resolved from <code>obj.vtable().resolved_traits()</code>; falls back to bare <code>slot#N</code> for slots without a matching trait (e.g. the hidden EventDispatcher dispatch-list slot)</td></tr>
+    <tr><td><code>dyn:&lt;name&gt;</code> / <code>dyn:&lt;u32&gt;</code></td><td><code>values()</code> (dynamic property map), string / uint keys</td></tr>
+    <tr><td><code>dict-key</code> / <code>dict-val</code></td><td><code>values()</code>, Object keys (used by non-weak <code>Dictionary</code>)</td></tr>
+    <tr><td><code>bound-method#N:&lt;methodName&gt;</code> (or <code>bound-method#N</code>)</td><td><code>diag_bound_methods()</code>. Method name resolved via vtable lookup (same pattern as <code>slot#N:&lt;name&gt;</code>)</td></tr>
+    <tr><td><code>receiver</code></td><td>(FunctionObject only) <code>executable().diag_bound_receiver()</code></td></tr>
+    <tr><td><code>scope[N]</code></td><td>(FunctionObject only) <code>executable().diag_scope()</code> levels</td></tr>
+    <tr><td><code>prototype</code></td><td>(FunctionObject) <code>prototype()</code>, (ClassObject) <code>diag_prototype()</code></td></tr>
+    <tr><td><code>array[N]</code></td><td>(ArrayObject) <code>storage()</code> indices</td></tr>
+    <tr><td><code>vector[N]</code></td><td>(VectorObject) <code>storage()</code> indices</td></tr>
+    <tr><td><code>dict-weak-val</code></td><td>(DictionaryObject) <code>diag_weak_entry_values()</code></td></tr>
+    <tr><td><code>dispatch-listener</code></td><td>(any EventDispatcher) <code>diag_handler_targets()</code>, strong only</td></tr>
+    <tr><td><code>child[N]</code></td><td>(DisplayObjectContainer) <code>iter_render_list()</code></td></tr>
+    <tr><td><code>masker</code> / <code>maskee</code></td><td>(DisplayObject) <code>masker()</code> / <code>maskee()</code></td></tr>
+    <tr><td><code>hit-area</code></td><td>(MovieClip) <code>hit_area()</code></td></tr>
+    <tr><td><code>loader-info</code></td><td>(DisplayObject) <code>loader_info()</code></td></tr>
+    <tr><td><code>loader-info.root</code></td><td>(LoaderInfoObject) <code>diag_loaded_stream_root()</code></td></tr>
+    <tr><td><code>loader-info.loader</code></td><td>(LoaderInfoObject) <code>loader()</code></td></tr>
+    <tr><td><code>loader-info.shared-events</code></td><td>(LoaderInfoObject) <code>shared_events()</code></td></tr>
+    <tr><td><code>loader-info.uncaught-error-events</code></td><td>(LoaderInfoObject) <code>uncaught_error_events()</code></td></tr>
+    <tr><td><code>context-menu</code></td><td>(InteractiveObject) <code>context_menu()</code></td></tr>
+  </tbody>
+</table>
+<p><code>__proto__</code> was the last-added edge and proved essential. For the vast majority of instances it points at <code>ClassObject.prototype</code> (already reachable as <code>root[class:Name].prototype</code>) and is a no-op for retention. But AS3 code can rewrite <code>instance.__proto__</code> to chain unrelated objects (the proto chain), creating a strong edge gc-arena traces but a plain slot/dyn enumeration would miss.</p>
+<p>The trait-name suffix on <code>slot#N:&lt;traitName&gt;</code> and <code>bound-method#N:&lt;methodName&gt;</code> is resolved by <code>lookup_slot_name(obj, N)</code> / <code>lookup_method_name(obj, N)</code>, which linearly scan <code>obj.vtable().resolved_traits()</code> for the entry whose <code>Property::Slot { slot_id }</code> / <code>Property::ConstSlot { slot_id }</code> / <code>Property::Method { disp_id }</code> matches. Linear scan is acceptable: trait maps for typical Flex classes are O(100) entries and the walker is on-demand, not on a hot path. Resolution failure is silent (label falls back to the bare numeric form) so the dump is never broken by a missing trait.</p>
+
+<h3>Edges intentionally NOT traversed</h3>
+<p>The header line lists <code>skipped=[LoadManager, EventObject-native, Sound/NetStream/Socket, AVM1, E4X-internals]</code>. The rationale per category:</p>
+<ul>
+  <li><strong>Weak edges</strong> (weak <code>Dictionary</code> keys, weak <code>DispatchList</code> handlers, the
+    weak broadcast lists, the orphan list) do not retain. Their presence does NOT pin the target, so traversing
+    them would only produce noise. (Values of weak-keyed Dictionary entries ARE traversed: they are strongly
+    held until the entry is pruned.)</li>
+  <li><strong><code>E4XNode</code> internals.</strong> XML subtrees (parent / children) cannot reference UI
+    objects, and skipping them keeps tens of thousands of nodes out of the walk on XML-heavy workloads. Whole
+    <code>XmlObject</code> wrappers are still visited (via their slot/dyn edges), but the internal E4X tree is
+    not unfolded.</li>
+  <li><strong>AVM1.</strong> Out of scope — this is an AVM2 retention analyzer.</li>
+  <li><strong>LoadManager, EventObject-native, Sound/NetStream/Socket.</strong> These hold Rust-side resources
+    rather than AVM2 graphs; their AVM2 facades are still reachable through normal edges, but their internal
+    state is not.</li>
+</ul>
+
+<h3>BFS implementation details</h3>
+<p>The walker keeps:</p>
+<pre><code>struct Walker&lt;'gc&gt; {
+    nodes: Vec&lt;Node&lt;'gc&gt;&gt;,              // spanning-tree nodes
+    visited: HashMap&lt;*const (), usize&gt;, // pointer -&gt; node index
+    queue: VecDeque&lt;usize&gt;,             // BFS queue
+    target_local: String,
+    target_pkg: Option&lt;String&gt;,
+    target_nodes: Vec&lt;usize&gt;,           // indices of nodes matching the target
+    extra_in_edges: Vec&lt;…&gt;,             // in-edges into already-visited targets
+    node_cap_hit: bool,
+}</code></pre>
+<ul>
+  <li><code>visited</code> keys on raw pointer to deduplicate (the gc-arena allocation is alive throughout the
+    walk, so the pointer is stable).</li>
+  <li>When a node is added that already exists in <code>visited</code> AND is a target, the call is treated as an
+    extra in-edge: the spanning-tree parent stays as before, but the additional
+    <code>(from, label, target_idx)</code> is recorded in <code>extra_in_edges</code>. At report time, all
+    retainer in-edges are listed (spanning-tree edge + every extra) so multiple independent retention paths
+    surface.</li>
+  <li><code>NODE_CAP = 4_000_000</code> guards against pathological graphs; it is generously above any observed
+    live-object population.</li>
+</ul>
+
+<h3>Completeness check</h3>
+<p>The report's header compares <code>targets_found</code> against <code>diag_alive::alive_count_for(target_class)</code>:</p>
+<pre><code>RuffleRetentionPath class=… alive=A visited=V roots=R targets_found=T retainers=N skipped=[…]</code></pre>
+<p>If <code>T &lt; A</code>, the diagnostic prints an explicit "NO PATH FOUND" line indicating that the missing retainers hide in one of the non-enumerated categories. The skipped list in the header is the direct hint to the next investigation step. This completeness check is the difference between "walker found a path" and "walker exhausted the strong graph". The former is enough when a path is found; the latter is what tells you when the walker itself needs another edge category.</p>
+
+<!-- ============================================================ -->
+<h2 id="accessors">Read-only accessors: <code>diag_*</code> methods</h2>
+<p>A handful of types have read-only accessors with a <code>diag_</code> prefix so the walker can introspect their internals without otherwise exposing them. All are explicitly marked for removal before the upstream PR.</p>
+<table>
+  <thead><tr><th>Type</th><th>Accessor</th><th>Returns</th></tr></thead>
+  <tbody>
+    <tr><td><code>Domain</code></td><td><code>diag_children</code></td><td>Live children list (without egui cfg gate)</td></tr>
+    <tr><td><code>Script</code></td><td><code>init</code></td><td>Stored <code>(Method, Object, Domain)</code> without lazy-init side effects</td></tr>
+    <tr><td><code>CallStack</code></td><td><code>frames</code></td><td>Read-only slice of current frames</td></tr>
+    <tr><td><code>ScriptObjectData</code></td><td><code>proto</code></td><td><code>Lock&lt;Option&lt;Object&gt;&gt;</code> value (was already pub)</td></tr>
+    <tr><td><code>ScriptObjectData</code></td><td><code>diag_slots_len</code></td><td><code>slots.len()</code></td></tr>
+    <tr><td><code>ScriptObjectData</code></td><td><code>diag_bound_methods</code></td><td>Borrow of <code>bound_methods</code> Vec</td></tr>
+    <tr><td><code>ClassObject</code></td><td><code>diag_prototype</code></td><td>Non-panicking variant of <code>prototype()</code></td></tr>
+    <tr><td><code>DictionaryObject</code></td><td><code>diag_weak_entry_values</code></td><td>Values in the weak-keys side table</td></tr>
+    <tr><td><code>FunctionObject</code></td><td><code>diag_bound_receiver</code></td><td>The bound receiver <code>Value</code>, if any</td></tr>
+    <tr><td><code>FunctionObject</code></td><td><code>diag_scope</code></td><td>The captured <code>ScopeChain</code></td></tr>
+    <tr><td><code>LoaderInfoObject</code></td><td><code>diag_loaded_stream_root</code></td><td>The <code>DisplayObject</code> content of the LoaderStream</td></tr>
+    <tr><td><code>ExternalInterface</code></td><td><code>diag_callbacks</code></td><td>Iterator over registered callbacks</td></tr>
+    <tr><td><code>Timer</code></td><td><code>diag_callback</code>, <code>diag_id</code></td><td>Read-only callback + ID</td></tr>
+  </tbody>
+</table>
+<p>The accessors never mutate state. They are intentionally separate from the existing API so they can be deleted en bloc by removing every function whose name matches <code>^diag_</code>. The unique exception is <code>Domain::diag_children</code>, which is named to match the egui-gated <code>Domain::children</code> it replaces; rather than ungate the existing method (which would change <code>cfg</code> boundaries for unrelated code), we add a parallel accessor with a more explicit name.</p>
+
+<!-- ============================================================ -->
+<h2 id="js">JS-side surface</h2>
+<p>Two functions are installed on <code>window</code> from <code>web/src/lib.rs::global_init</code>:</p>
+
+<h3><code>window.dumpRuffle()</code></h3>
+<pre><code>window.dumpRuffle()    // returns true</code></pre>
+<p>Forwards to <code>ruffle_core::diag_request::request_dump_ruffle()</code>. Sets the atomic flag; <code>Player::update</code> consumes it on the next frame and emits all counter snapshots:</p>
+<ul style="columns:2">
+  <li><code>RufflePerf</code></li>
+  <li><code>RuffleListenerReg</code></li>
+  <li><code>RuffleLiveAS3</code></li>
+  <li><code>RuffleDispatchListSize</code> and <code>_Singletons</code></li>
+  <li><code>RuffleXref</code></li>
+  <li><code>RuffleUnboundStageCaller</code></li>
+  <li><code>RuffleRootListeners Stage</code></li>
+  <li><code>RuffleRootListeners Root</code></li>
+</ul>
+<p>Returns <code>true</code> so AS3 callers (<code>ExternalInterface.call("dumpRuffle")</code>) can distinguish "function available" from "function missing" (the latter returns <code>null</code>).</p>
+
+<h3><code>window.dumpRetentionPath(className, maxRetainers?)</code></h3>
+<pre><code>window.dumpRetentionPath("pkg::Class")            // returns true; default 30 retainers
+window.dumpRetentionPath("Class")                 // bare local, default 30 retainers
+window.dumpRetentionPath("pkg::Class", 100)       // print up to 100 retainers
+window.dumpRetentionPath("pkg::Class", 0)         // 0 → fall back to the default (30)</code></pre>
+<p>Forwards to <code>ruffle_core::diag_request::request_retention_dump(name, max)</code>. The optional <code>maxRetainers</code> argument caps how many retainer lines get printed; <strong>the BFS itself always completes</strong>, so the header counts (<code>alive</code>, <code>visited</code>, <code>targets_found</code>, <code>retainers</code>) are accurate regardless of the print cap — only the per-retainer detail lines are truncated. Passing <code>0</code> or omitting the argument falls back to <code>diag_request::DEFAULT_MAX_RETAINERS</code> (<code>30</code>).</p>
+<p>Stores the request; <code>Player::update</code> consumes it on the next frame and runs the walker on a <code>mutate_with_update_context</code> closure. Output is <code>RuffleRetentionPath …</code> warn lines. Returns <code>true</code> for availability detection.</p>
+
+<h3>Installation pattern</h3>
+<p>The functions are installed in two equivalent ways:</p>
+<ol>
+  <li><code>#[wasm_bindgen(js_name = "...")]</code> exports — accessible directly on the <code>wasm-bindgen</code>
+    namespace.</li>
+  <li>As global <code>window</code> properties via <code>js_sys::Reflect::set</code>, with
+    <code>Closure::forget()</code> to leak the closure for the lifetime of the module. This is what makes them
+    callable from the DevTools console without any wiring on the host page, and from AS3 via
+    <code>ExternalInterface.call("dumpRuffle")</code>.</li>
+</ol>
+<p>The browser console is the primary intended consumer. AS3 calls are useful for triggering a dump from within an integration test or a custom dev UI.</p>
+
+<!-- ============================================================ -->
+<h2 id="output">Output format reference</h2>
+<p>All diagnostic output is on <code>tracing::warn!</code> level with the <code>target: "ruffle_diag"</code> filter. In the browser console these appear as <code>WARN</code> lines.</p>
+
+<h3><code>RufflePerf</code></h3>
+<pre><code>RufflePerf wall={ms}ms frames={N} renders={N} updates={N} \
+ avm2={us}us(avg {us}us/frame) render={us}us(avg {us}us/render) \
+ gc_inc={us}us(avg {us}us/update) gc_full={us}us</code></pre>
+<p>Per-frame wall-clock cost breakdown accumulated since the previous dump. Counters reset at the end of each dump so the next snapshot covers a fresh window.</p>
+
+<h3><code>RuffleListenerReg</code></h3>
+<pre><code>RuffleListenerReg distinct_pairs={N} total_adds={N} total_removes={N} net={N} \
+ top_alive=[Class:event=+adds/-removes(alive N), …] \
+ top_churn=[Class:event=+adds/-removes, …]</code></pre>
+
+<h3><code>RuffleLiveAS3</code></h3>
+<pre><code>RuffleLiveAS3 distinct={N} total_alive={N} total_created={N} \
+ top_alive=[Class=alive(of created), …]</code></pre>
+
+<h3><code>RuffleDispatchListSize</code></h3>
+<pre><code>RuffleDispatchListSize receivers={N} max_len={N} \
+ top_class=[Class max={N}(+Δ) avg={N} count={N}, …]
+
+RuffleDispatchListSize_Singletons count&lt;=5={N} \
+ top_growing=[Class max={N}(+Δ) count={N}, …]</code></pre>
+
+<h3><code>RuffleXref</code></h3>
+<pre><code>RuffleXref pairs={N} top=[Dispatcher-&gt;Receiver={N}(+Δ), …]</code></pre>
+
+<h3><code>RuffleUnboundStageCaller</code></h3>
+<pre><code>RuffleUnboundStageCaller distinct={N} top=[Class={N}(+Δ), …]</code></pre>
+
+<h3><code>RuffleRootListeners</code></h3>
+<pre><code>RuffleRootListeners &lt;label&gt; total={N} strong={M} weak={K} \
+ top=[Class(S)={N}, Class(w)={N}, …]</code></pre>
+<p><code>&lt;label&gt;</code> is <code>Stage</code> for the stage dispatch list and <code>Root</code> for the root content of the running movie. <code>(S)</code> is strong, <code>(w)</code> is weak.</p>
+
+<h3><code>RuffleRetentionPath</code></h3>
+<h4>Header</h4>
+<pre><code>RuffleRetentionPath class={QName} alive={A} visited={V} roots={R} \
+ targets_found={T} retainers={N} \
+ skipped=[…] (weak edges not traversed)</code></pre>
+<p>If <code>T == 0</code>:</p>
+<pre><code>RuffleRetentionPath NO PATH FOUND: alive={A} instance(s) are retained only via \
+ a non-enumerated edge category (see skipped list) — extend the walker or \
+ escalate to a gc-arena fork with trace recording</code></pre>
+<h4>Body — overall grammar</h4>
+<p>One line per retainer (up to the per-call cap — defaults to <code>DEFAULT_MAX_RETAINERS = 30</code>, overridable from JS via <code>window.dumpRetentionPath(name, maxRetainers)</code>):</p>
+<pre><code>RuffleRetentionPath retainer#N: &lt;chain&gt; -[&lt;edge-label&gt;]-&gt; TARGET(&lt;class&gt; @0x&lt;ptr&gt;)</code></pre>
+<p>A <code>&lt;chain&gt;</code> is the spanning-tree path from a GC root to the parent of the target. Its general form:</p>
+<pre><code>&lt;root-label&gt;&lt;class-label-0&gt; -[&lt;edge-label-1&gt;]-&gt; &lt;class-label-1&gt; -[&lt;edge-label-2&gt;]-&gt; … -[&lt;edge-label-k&gt;]-&gt; &lt;class-label-k&gt;</code></pre>
+<p>Hop 0 is a root (no arrow, just <code>root[…]</code> followed by the root node's class-label). Subsequent hops have the form <code>-[&lt;edge&gt;]-&gt; (&lt;class&gt;)</code>. If more than 30 retainers are found, the line <code>… N more retainer edge(s) omitted</code> is emitted at the end. The full graph is still walked — the cap is only on print output to keep one dump readable in the console.</p>
+
+<h4>Root labels (only on hop 0, prefix <code>root[...]</code>)</h4>
+<table>
+  <thead><tr><th>Syntax</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>root[stage]</code></td><td>The stage display tree</td></tr>
+    <tr><td><code>root[class:&lt;Name&gt;]</code></td><td>A <code>ClassObject</code> (statics + prototype hang off these)</td></tr>
+    <tr><td><code>root[script:&lt;Name&gt;]</code></td><td>Script global object (one per top-level <code>package</code> block; package-level vars live here)</td></tr>
+    <tr><td><code>root[timer#&lt;N&gt;]</code></td><td>Active <code>flash.utils.Timer</code> callback</td></tr>
+    <tr><td><code>root[timer#&lt;N&gt;:param]</code></td><td>A parameter passed to a Timer callback</td></tr>
+    <tr><td><code>root[extcallback:'&lt;name&gt;']</code></td><td><code>ExternalInterface.addCallback</code> registration</td></tr>
+    <tr><td><code>root[mouse-hovered]</code></td><td><code>mouse_data.hovered</code></td></tr>
+    <tr><td><code>root[mouse-pressed]</code></td><td><code>mouse_data.pressed</code></td></tr>
+    <tr><td><code>root[mouse-right-pressed]</code></td><td><code>mouse_data.right_pressed</code></td></tr>
+    <tr><td><code>root[mouse-middle-pressed]</code></td><td><code>mouse_data.middle_pressed</code></td></tr>
+    <tr><td><code>root[drag-object]</code></td><td><code>drag_object.display_object</code></td></tr>
+    <tr><td><code>root[focus]</code></td><td><code>focus_tracker.get()</code></td></tr>
+  </tbody>
+</table>
+
+<h4>Edge labels — Family A: trait-based (slot / bound-method)</h4>
+<table>
+  <thead><tr><th>Syntax</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>slot#N:&lt;traitName&gt;</code></td><td>Slot <code>N</code>, trait name resolved via vtable</td></tr>
+    <tr><td><code>slot#N</code></td><td>Slot <code>N</code>, trait name unresolved (hidden / synthetic)</td></tr>
+    <tr><td><code>bound-method#N:&lt;methodName&gt;</code></td><td>Bound-method cache entry at disp_id <code>N</code>, name resolved</td></tr>
+    <tr><td><code>bound-method#N</code></td><td>Bound-method cache entry, name unresolved</td></tr>
+  </tbody>
+</table>
+
+<h4>Edge labels — Family B: dynamic property map</h4>
+<table>
+  <thead><tr><th>Syntax</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>dyn:&lt;string&gt;</code></td><td>Dynamic property with string key</td></tr>
+    <tr><td><code>dyn:&lt;u32&gt;</code></td><td>Dynamic property with uint key</td></tr>
+    <tr><td><code>dict-key</code></td><td>Object-key edge of a non-weak Dictionary entry</td></tr>
+    <tr><td><code>dict-val</code></td><td>Object-key entry's value</td></tr>
+    <tr><td><code>dict-weak-val</code></td><td>Value of a weak-keys Dictionary entry (keys themselves are weak, not traversed)</td></tr>
+  </tbody>
+</table>
+
+<h4>Edge labels — Family C: indexed collection storage</h4>
+<table>
+  <thead><tr><th>Syntax</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>array[N]</code></td><td><code>ArrayObject</code> storage at index <code>N</code></td></tr>
+    <tr><td><code>vector[N]</code></td><td><code>VectorObject</code> storage at index <code>N</code></td></tr>
+  </tbody>
+</table>
+
+<h4>Edge labels — Family D: function internals</h4>
+<table>
+  <thead><tr><th>Syntax</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>receiver</code></td><td><code>bound_receiver</code> of a <code>FunctionObject</code></td></tr>
+    <tr><td><code>scope[N]</code></td><td>Scope-chain level <code>N</code> of a closure (captured activation objects)</td></tr>
+    <tr><td><code>prototype</code></td><td><code>FunctionObject.prototype</code> OR <code>ClassObject.prototype</code></td></tr>
+  </tbody>
+</table>
+
+<h4>Edge labels — Family E: display tree</h4>
+<table>
+  <thead><tr><th>Syntax</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>child[N]</code></td><td><code>DisplayObjectContainer.iter_render_list()[N]</code></td></tr>
+    <tr><td><code>masker</code></td><td><code>DisplayObjectBase.masker</code></td></tr>
+    <tr><td><code>maskee</code></td><td><code>DisplayObjectBase.maskee</code></td></tr>
+    <tr><td><code>hit-area</code></td><td><code>MovieClip.hit_area</code></td></tr>
+  </tbody>
+</table>
+
+<h4>Edge labels — Family F: special back-references and listeners</h4>
+<table>
+  <thead><tr><th>Syntax</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>__proto__</code></td><td><code>ScriptObjectData.proto</code></td></tr>
+    <tr><td><code>dispatch-listener</code></td><td>Strong handler in an EventDispatcher dispatch list (weak handlers are not traversed)</td></tr>
+    <tr><td><code>context-menu</code></td><td><code>InteractiveObject.context_menu</code></td></tr>
+    <tr><td><code>loader-info</code></td><td><code>DisplayObject.loader_info</code></td></tr>
+    <tr><td><code>loader-info.root</code></td><td><code>LoaderInfoObject.loaded_stream.root</code> (loaded content)</td></tr>
+    <tr><td><code>loader-info.loader</code></td><td><code>LoaderInfoObject.loader</code> (the <code>Loader</code> StageObject)</td></tr>
+    <tr><td><code>loader-info.shared-events</code></td><td><code>LoaderInfoObject.shared_events</code></td></tr>
+    <tr><td><code>loader-info.uncaught-error-events</code></td><td><code>LoaderInfoObject.uncaught_error_events</code></td></tr>
+  </tbody>
+</table>
+
+<h4>Class labels (parenthesized, after each hop)</h4>
+<table>
+  <thead><tr><th>Syntax</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>(&lt;ClassName&gt;)</code></td><td>Instance node; <code>obj.instance_class().name().local_name()</code></td></tr>
+    <tr><td><code>(class &lt;ClassName&gt;)</code></td><td>The node <em>is</em> a <code>ClassObject</code> (e.g. when reached via <code>root[class:X]</code>)</td></tr>
+    <tr><td><code>TARGET(&lt;ClassName&gt; @0x&lt;ptr&gt;)</code></td><td>The terminal target node: same as <code>(ClassName)</code> plus the matching-class marker and a raw pointer for disambiguation between multiple alive instances</td></tr>
+  </tbody>
+</table>
+
+<h4>Worked example</h4>
+<p>A real retention path (from a SmartTable workload):</p>
+<pre><code>RuffleRetentionPath retainer#23: root[class:FlexGlobals](class FlexGlobals)
+   -[slot#0:topLevelApplication]-&gt; (application)
+   -[slot#59:_focusManager]-&gt; (FocusManager)
+   -[slot#10:focusableObjects]-&gt; (Array)
+   -[array[54]]-&gt; (SmartTable)
+   -[slot#158:visibleData]-&gt; (Object)
+   -[dyn:916603BF-33FA-F935-1886-BC0F00DF502A]-&gt; (SmartTableItemRendererLight)
+   -[slot#39:_data]-&gt; TARGET(XML @0x16131d08)</code></pre>
+<p>Reading it left-to-right:</p>
+<ol>
+  <li><strong>Root</strong>: <code>class:FlexGlobals</code> — a static class object.</li>
+  <li><strong><code>slot#0:topLevelApplication</code></strong> — the application instance held by <code>FlexGlobals</code>.</li>
+  <li><strong><code>slot#59:_focusManager</code></strong> — the FocusManager assigned to the application.</li>
+  <li><strong><code>slot#10:focusableObjects</code></strong> — an Array of focusable components.</li>
+  <li><strong><code>array[54]</code></strong> — the 54th element, a <code>SmartTable</code>.</li>
+  <li><strong><code>slot#158:visibleData</code></strong> — a private SmartTable cache (the field we identified as the leak source).</li>
+  <li><strong><code>dyn:&lt;UID&gt;</code></strong> — the dynamic Object map keyed by item UID.</li>
+  <li><strong><code>(SmartTableItemRendererLight)</code></strong> — the item renderer that the cache maps to.</li>
+  <li><strong><code>slot#39:_data</code></strong> — the renderer's <code>data</code> property, pointing at the leaked XML.</li>
+</ol>
+<p>The leak diagnosis falls out of the path itself: <code>slot#158:visibleData</code> names exactly which SmartTable field is keeping the renderer alive, and <code>slot#39:_data</code> names the renderer property that pins the XML.</p>
+
+<!-- ============================================================ -->
+<h2 id="hooks">Instrumentation hooks</h2>
+<p>The two file paths under <code>core/src/avm2/</code> that carry instrumentation hooks at AVM2-event time (rather than just data definitions) are:</p>
+
+<h3><code>core/src/avm2/globals/flash/events/event_dispatcher.rs</code></h3>
+<p>Both <code>add_event_listener</code> and <code>remove_event_listener</code> are hooked. After the underlying dispatch-list operation completes:</p>
+<ul>
+  <li><strong><code>add_event_listener</code></strong> fires:
+    <ul>
+      <li><code>diag_listeners::record_add(class_name, event_type)</code></li>
+      <li><code>dispatch_sidecar.record_listener_add(event_type)</code> — keeps the sidecar's per-event-type
+        counter in sync</li>
+      <li><code>diag_dispatch::record_add(receiver_id, class_name, total_len)</code> — using the sidecar's
+        pointer as the stable receiver identity</li>
+      <li><code>diag_xref::record_add(dispatcher_class, receiver_class)</code> — only when STRONG and the
+        receiver class differs from the dispatcher</li>
+      <li><code>diag_unbound_caller</code> — only when STRONG and unbound and the dispatcher is
+        <code>flash.display::Stage</code>; walks the AVM2 call stack to name the AS3 caller class.</li>
+    </ul>
+  </li>
+  <li><strong><code>remove_event_listener</code></strong> fires:
+    <ul>
+      <li><code>diag_listeners::record_remove(class_name, event_type)</code></li>
+      <li><code>dispatch_sidecar.record_listener_remove(event_type)</code></li>
+    </ul>
+  </li>
+</ul>
+<p>The hooks are all-purpose: they fire for every listener, whether the result is interesting to the investigation or not. Filtering happens at dump time, not at hook time. This keeps the hook path cheap.</p>
+
+<h3><code>core/src/avm2/events.rs</code></h3>
+<p>The <code>DispatchList</code> type itself gets two diagnostic accessors:</p>
+<ul>
+  <li><code>diag_total_len()</code> — sum of handler counts across all event types and priorities, used by
+    <code>diag_dispatch</code> to record post-add total length.</li>
+  <li><code>diag_handler_targets(mc)</code> — returns <code>Vec&lt;(is_weak, FunctionObject)&gt;</code> with dead
+    weak entries already skipped, used by <code>diag_roots</code> and the retention-path walker.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="removal">Removal checklist</h2>
+<div class="note warn">
+  <span class="lbl">Not for upstream</span>
+  This branch will not go upstream as-is. When the diagnostic phase is done, the following must be
+  reverted/removed.
+</div>
+<ol>
+  <li><strong>All <code>core/src/diag_*.rs</code> files.</strong></li>
+  <li><strong><code>core/src/avm2/diag_retention.rs</code></strong> and its <code>pub(crate) mod diag_retention;</code> in <code>core/src/avm2.rs</code>.</li>
+  <li><strong>All <code>pub mod diag_*;</code> and <code>pub(crate) mod diag_*;</code> in <code>core/src/lib.rs</code>.</strong></li>
+  <li><strong>All <code>diag_*</code> methods</strong> on <code>Domain</code>, <code>Script</code>, <code>CallStack</code>, <code>ScriptObjectData</code>, <code>ClassObject</code>, <code>DictionaryObject</code>, <code>FunctionObject</code>, <code>LoaderInfoObject</code>, <code>ExternalInterface</code>, <code>Timer</code>.</li>
+  <li><strong>The sidecar fields</strong> <code>_alive_tracker</code> and <code>dispatch_sidecar</code> on <code>ScriptObjectData</code>, the structs <code>AliveTracker</code> / <code>DispatchSidecar</code>, their <code>Drop</code> impls, and the <code>mc</code> parameter added to <code>ScriptObjectData::new</code> / <code>custom_new</code> (propagated through ~30 <code>*_object.rs</code> files).</li>
+  <li><strong>The <code>DomainData::children</code> ungate</strong> (revert the <code>#[cfg(feature = "egui")]</code> change).</li>
+  <li><strong>All hook calls</strong> in <code>core/src/avm2/globals/flash/events/event_dispatcher.rs</code>.</li>
+  <li><strong>All <code>tracing::warn!(target: "ruffle_diag", …)</code> call sites</strong> in <code>core/src/player.rs</code>, plus the <code>Player::dump_perf_diag</code> and <code>Player::dump_root_listeners_diag</code> methods, plus the per-frame timing accumulators and their reset logic.</li>
+  <li><strong>The trigger flag consumption</strong> at the end of <code>Player::update</code>.</li>
+  <li><strong>The JS exports</strong> <code>dumpRuffle</code>, <code>dumpRetentionPath</code> and their <code>window</code> installations in <code>web/src/lib.rs</code>.</li>
+</ol>
+<p>Mechanical aid: every change is prefixed <code>DIAGNOSTIC:</code> in a comment, or named with the <code>diag_</code> prefix. <code>grep -rn 'DIAGNOSTIC:\|diag_' core/src web/src</code> enumerates every site.</p>
+
+<!-- ============================================================ -->
+<h2 id="caveats">Caveats and limitations</h2>
+<ul>
+  <li><strong>The walker is a forward strong-edge reachability analyzer, not a reverse-lookup tool.</strong> It
+    cannot answer "who retains object X" by pointer — only by class name. To investigate a specific instance
+    whose class is shared by many siblings, the dump must be reviewed manually to find the one whose retention
+    edge looks anomalous.</li>
+  <li><strong>The walker covers strong AVM2 edges only.</strong> Rust-side strong references that gc-arena traces
+    but the walker does not enumerate (e.g. a future <code>SoundChannel</code> field added to <code>Avm2</code>
+    that holds an <code>Object</code>) will produce a <code>targets_found &lt; alive</code> mismatch. The
+    completeness check makes this explicit, but resolving it requires extending the walker.</li>
+  <li><strong>The accuracy of <code>diag_xref</code> removes</strong> is approximate by design:
+    <code>removeEventListener</code> does not differentiate weak vs strong registration. The counter is floored
+    at 0, so harmless noise on balanced pairs does not affect the leak signal (only "never removed" pairs grow
+    monotonically).</li>
+  <li><strong><code>diag_unbound_caller</code> only fires for Stage.</strong> By construction it is intended to
+    attribute the well-known <code>&lt;unbound&gt;(S)=N</code> pattern on Stage. Extending it to other
+    dispatchers is straightforward but was not needed for the investigation.</li>
+  <li><strong><code>diag_dispatch</code>'s per-receiver entry uses <code>(pointer, class_name)</code> as
+    key.</strong> Pointer reuse after collection is handled by <code>DispatchSidecar::drop</code> calling
+    <code>diag_dispatch::record_drop</code> <em>before</em> the pointer can be handed to a new allocation; this
+    is correct under gc-arena's collection model but would need re-checking under any alternative allocator.</li>
+  <li><strong>The dump output is one line per snapshot per counter</strong> and has a top-N cap. For the
+    per-frame counter dumps the cap is hard-coded at the call sites in <code>Player::dump_perf_diag</code>. For
+    the on-demand <code>RuffleRetentionPath</code>, the cap is <strong>per-call parameterizable</strong> via
+    <code>window.dumpRetentionPath(name, maxRetainers)</code> — the BFS still completes, only the printed
+    retainer lines are truncated, so header counts stay accurate regardless of the cap.</li>
+  <li><strong>The branch is not meant for upstream PR.</strong> It is the consolidated artifact of an
+    investigation. The actual fixes derived from this work go on <code>fix-memory-leaks</code> (the 5
+    upstream-ready fixes the branch is built on) and on <code>tile-memory-allocator</code> (the tilemalloc
+    allocator, a separate PR-ready branch). The diagnostic instrumentation here is intentionally disposable.</li>
+</ul>
+
+<div class="footer">
+  Self-contained document — no external dependencies. Light/dark theme follows <code>prefers-color-scheme</code>.
+  Editable directly as a text file. Converted from <code>docs/diag_instruments.md</code> on the
+  <code>diag-instruments</code> branch. Companion documents: <code>tile-memory-allocator.html</code>,
+  <code>xml-readonly-improvements.html</code>, <code>xml-general-improvements.html</code>,
+  <code>pluggable-font-renderer.html</code>.
+</div>
+
+</div>
+</body>
+</html>

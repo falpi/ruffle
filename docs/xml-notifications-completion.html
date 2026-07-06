@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en" data-doc="xml-notifications-completion">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XML change notifications — design &amp; internals</title>
+<style>
+  :root{
+    --bg:#ffffff; --surface:#f6f6f4; --surface2:#efeee9;
+    --text:#1d1d1b; --text2:#5f5e5a;
+    --border:#d3d1c7; --border2:#b4b2a9;
+    --accent:#534ab7; --accent-soft:#7f77dd;
+    --good:#1d9e75; --warn:#d85a30; --info:#378add;
+    --code-bg:#f1efe8;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#1a1a18; --surface:#242420; --surface2:#2c2c28;
+      --text:#ecece9; --text2:#b4b2a9;
+      --border:#444441; --border2:#5f5e5a;
+      --accent:#afa9ec; --accent-soft:#7f77dd;
+      --good:#5dcaa5; --warn:#f0997b; --info:#85b7eb;
+      --code-bg:#26261f;
+    }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:16px; line-height:1.65;
+  }
+  .wrap{max-width:900px; margin:0 auto; padding:48px 28px 96px}
+  header.doc{border-bottom:1px solid var(--border); padding-bottom:24px; margin-bottom:8px}
+  header.doc h1{font-size:30px; margin:0 0 6px; letter-spacing:-.01em}
+  header.doc .sub{color:var(--text2); font-size:15px}
+  header.doc .meta{color:var(--text2); font-size:13px; margin-top:14px}
+  header.doc .meta code{font-size:12px}
+  h2{font-size:23px; margin:52px 0 4px; letter-spacing:-.01em; scroll-margin-top:20px}
+  h2 .n{color:var(--accent); font-variant-numeric:tabular-nums; margin-right:10px}
+  h3{font-size:17px; margin:28px 0 4px}
+  p{margin:12px 0}
+  a{color:var(--accent)}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.88em;
+    background:var(--code-bg); padding:.12em .4em; border-radius:4px}
+  pre{background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+    padding:14px 16px; overflow:auto; font-size:13px; line-height:1.5}
+  pre code{background:none; padding:0}
+  .lead{font-size:18px; color:var(--text)}
+  ul,ol{padding-left:22px} li{margin:5px 0}
+  nav.toc{background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:18px 22px; margin:28px 0 8px}
+  nav.toc strong{display:block; font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--text2); margin-bottom:8px}
+  nav.toc ol{margin:0; columns:2; column-gap:32px}
+  nav.toc a{text-decoration:none; color:var(--text)}
+  nav.toc a:hover{color:var(--accent)}
+  .note{border-left:3px solid var(--accent); background:var(--surface);
+    padding:12px 16px; border-radius:0 8px 8px 0; margin:18px 0; font-size:15px}
+  .note.good{border-color:var(--good)}
+  .note.warn{border-color:var(--warn)}
+  .note .lbl{font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--text2); display:block; margin-bottom:2px}
+  figure{margin:24px 0; background:var(--surface); border:1px solid var(--border);
+    border-radius:10px; padding:20px}
+  figure svg{display:block; width:100%; height:auto}
+  figcaption{color:var(--text2); font-size:13px; margin-top:12px; text-align:center}
+  table{width:100%; border-collapse:collapse; margin:20px 0; font-size:14px}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:top}
+  th{font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--text2);
+    border-bottom:2px solid var(--border2)}
+  td.num,th.num{text-align:right; font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,monospace}
+  tr.sum td{font-weight:600; border-top:2px solid var(--border2); background:var(--surface)}
+  .neg{color:var(--warn); font-weight:600}
+  .ok{color:var(--good); font-weight:600}
+  td code{white-space:nowrap}
+  svg text{font-family:ui-sans-serif,system-ui,sans-serif}
+  .s-ti{font-weight:600; fill:var(--text); font-size:14px}
+  .s-h{font-weight:600; fill:var(--text); font-size:12px}
+  .s-t{fill:var(--text); font-size:12px}
+  .s-s{fill:var(--text2); font-size:10px}
+  .s-mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+  .s-box{fill:var(--bg); stroke:var(--border2); stroke-width:1.5}
+  .s-surf{fill:var(--surface2); stroke:var(--border2); stroke-width:1.2}
+  .s-hi{fill:var(--accent); fill-opacity:.14; stroke:var(--accent); stroke-width:1.5}
+  .s-good{fill:var(--good); fill-opacity:.16; stroke:var(--good); stroke-width:1.5}
+  .s-warn{fill:var(--warn); fill-opacity:.16; stroke:var(--warn); stroke-width:1.5}
+  .s-line{stroke:var(--border2); stroke-width:1.5; fill:none}
+  .s-arrow{stroke:var(--accent); stroke-width:1.6; fill:none}
+  .s-acc{fill:var(--accent)} .s-good-f{fill:var(--good)} .s-warn-f{fill:var(--warn)}
+  .footer{margin-top:64px; padding-top:20px; border-top:1px solid var(--border);
+    color:var(--text2); font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <h1>XML change notifications</h1>
+  <div class="sub">Completing the E4X notification protocol — <code>textSet</code>, node and namespace commands, and the re-entrancy discipline behind them.</div>
+  <div class="meta">
+    Ruffle · AVM2 / E4X &nbsp;·&nbsp; branch <code>xml-notifications-completion</code> &nbsp;·&nbsp;
+    last updated 2026-07-05 &nbsp;·&nbsp; single self-contained file (every diagram is inline SVG, no external dependencies).
+  </div>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#motivation">Motivation</a></li>
+    <li><a href="#protocol">The notification protocol</a></li>
+    <li><a href="#coverage">Command coverage: before / after</a></li>
+    <li><a href="#textset">Architecture of <code>textSet</code></a></li>
+    <li><a href="#childchanges">Caller-side commands: <code>childChanges</code></a></li>
+    <li><a href="#fastpath">The <code>notify_needed</code> fast path</a></li>
+    <li><a href="#reentrancy">Re-entrancy &amp; borrow discipline</a></li>
+    <li><a href="#flex">How Flex consumes the notifications</a></li>
+    <li><a href="#limitations">Known limitations</a></li>
+    <li><a href="#tests">Tests</a></li>
+    <li><a href="#appendix-a">Appendix A — changes by file</a></li>
+    <li><a href="#appendix-b">Appendix B — new internal API</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="motivation"><span class="n">1</span>Motivation</h2>
+<p class="lead">
+  Flash Player's E4X implementation carries an undocumented change-notification protocol
+  (<code>XML.setNotification()</code>) that the Flex framework uses as the backbone of XML data binding:
+  <code>mx.utils.XMLNotifier</code> installs a notification function on every item of an XML data provider,
+  and <code>mx.collections.XMLListAdapter</code> turns each notification into an
+  <code>itemUpdated()</code> → <code>COLLECTION_CHANGE</code> event that refreshes list and grid renderers.
+</p>
+<p>
+  Upstream Ruffle implements only a slice of the protocol (commit <code>d9944b261</code>, “avm2: Trigger XML
+  notifications for <em>attributes</em> changes”): <code>attributeAdded</code>, <code>attributeChanged</code>
+  and <code>nameSet</code>. Every other mutation — assigning element text, adding, replacing or deleting
+  child nodes, deleting attributes, namespace changes — mutates the tree <strong>silently</strong>.
+</p>
+<p>
+  The practical consequence in a Flex application: a two-way binding that writes
+  <code>item.FIELD&nbsp;=&nbsp;text</code> (an editable grid cell, an “enable the button when the value
+  differs” form) updates the XML but never re-runs the dependent bindings, because the
+  <code>COLLECTION_CHANGE</code> that Flash Player would emit through <code>textSet</code> never fires.
+  Attribute-driven UIs (<code>item.@visible&nbsp;=&nbsp;…</code>) work; element-driven UIs stay stale until
+  something else happens to re-assign renderer <code>data</code>.
+</p>
+<div class="note good">
+  <span class="lbl">Net result</span>
+  This branch completes the protocol: all <strong>11 notification commands</strong> that avmplus emits are
+  now implemented — every avmplus emission site, <code>normalize()</code> included — with semantics
+  transcribed from the avmplus sources (<code>XMLObject.cpp</code>, <code>E4XNode.cpp</code>,
+  <code>XMLListObject.cpp</code>) and zero cost on unwatched trees.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="protocol"><span class="n">2</span>The notification protocol</h2>
+<p>
+  A notification function is attached per node with <code>xml.setNotification(f)</code> and read back with
+  <code>xml.notification()</code>. On every mutation the player invokes, synchronously, the function of the
+  mutated node <em>and of each of its ancestors</em>:
+</p>
+<pre><code>function notifier(currentTarget:Object,  // the node whose notification fn is being invoked
+                  command:String,        // "textSet", "nodeAdded", "attributeChanged", …
+                  target:Object,         // the node the mutation happened on
+                  value:Object,          // command-specific payload
+                  detail:Object):void    // command-specific detail (usually the old value)</code></pre>
+<p>
+  In avmplus the dispatch is <code>XMLObject::issueNotifications</code>: starting from an
+  <em>initial target</em> it walks the parent chain and calls every non-null notification function with a
+  freshly created <code>currentTarget</code> wrapper. Ruffle's equivalent is
+  <code>XmlObject::trigger_notification</code>, which had the walk already — this branch extends the command
+  enum and adds the missing emission sites.
+</p>
+<p>
+  avmplus groups the emission sites behind two helpers, and this branch mirrors that split:
+</p>
+<ul>
+  <li><strong><code>nonChildChanges(type, value, detail)</code></strong> — the mutation is a property of the
+    node itself (attributes, name, namespaces, text value). Maps to
+    <code>trigger_notification</code> with <code>target&nbsp;=&nbsp;self</code>.</li>
+  <li><strong><code>childChanges(type, value, prior)</code></strong> — the mutation is about a child
+    (<code>nodeAdded</code>/<code>nodeChanged</code>/<code>nodeRemoved</code>). Fires <em>only when the value
+    is an XML or XMLList object</em>, and passes the replaced node, if any, as detail. Maps to the new
+    <code>XmlObject::trigger_child_changes</code> helper, which replicates both rules.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="coverage"><span class="n">3</span>Command coverage: before / after</h2>
+<table>
+  <thead><tr><th>Command</th><th>Emitted on</th><th>value / detail</th><th>Before</th><th>After</th></tr></thead>
+  <tbody>
+    <tr><td><code>attributeAdded</code></td><td><code>x.@a = v</code> (new)</td><td>attr name / new value</td><td class="ok">✓</td><td class="ok">✓</td></tr>
+    <tr><td><code>attributeChanged</code></td><td><code>x.@a = v</code> (existing)</td><td>attr name / old value</td><td class="ok">✓</td><td class="ok">✓</td></tr>
+    <tr><td><code>nameSet</code></td><td><code>setName()</code> / <code>setLocalName()</code></td><td>new name / old name</td><td class="ok">✓</td><td class="ok">✓</td></tr>
+    <tr><td><code>attributeRemoved</code></td><td><code>delete x.@a</code></td><td>attr name / old value</td><td class="neg">✗</td><td class="ok">✓</td></tr>
+    <tr><td><code>textSet</code></td><td><code>x.child = "text"</code>, list index put, <code>replace()</code>, <code>setChildren()</code></td><td>new text / old text</td><td class="neg">✗</td><td class="ok">✓</td></tr>
+    <tr><td><code>nodeAdded</code></td><td><code>appendChild</code>, <code>prependChild</code>, <code>insertChild*</code>, new property</td><td>added node / —</td><td class="neg">✗</td><td class="ok">✓</td></tr>
+    <tr><td><code>nodeChanged</code></td><td><code>x.child = &lt;node/&gt;</code>, <code>replace()</code>, list index put</td><td>new node(s) / old node</td><td class="neg">✗</td><td class="ok">✓</td></tr>
+    <tr><td><code>nodeRemoved</code></td><td><code>delete x.child</code>, <code>delete list[i]</code>, duplicate collapse</td><td>removed node / —</td><td class="neg">✗</td><td class="ok">✓</td></tr>
+    <tr><td><code>namespaceAdded</code></td><td><code>addNamespace()</code></td><td>Namespace / —</td><td class="neg">✗</td><td class="ok">✓</td></tr>
+    <tr><td><code>namespaceRemoved</code></td><td><code>removeNamespace()</code></td><td>Namespace / —</td><td class="neg">✗</td><td class="ok">✓</td></tr>
+    <tr><td><code>namespaceSet</code></td><td><code>setNamespace()</code></td><td>Namespace / —</td><td class="neg">✗</td><td class="ok">✓</td></tr>
+  </tbody>
+</table>
+<p>
+  <code>setNotification</code> itself is no longer marked as a stub. Passing anything that is not a
+  <code>Function</code> or <code>null</code> keeps throwing <code>TypeError&nbsp;#1034</code> through the
+  regular typed-parameter coercion, as the avmplus test expects.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="textset"><span class="n">4</span>Architecture of <code>textSet</code></h2>
+<p>
+  The single most consequential design decision, taken directly from avmplus
+  (<code>ElementE4XNode::_replace</code>): <strong><code>textSet</code> is emitted inside the
+  <code>[[Replace]]</code> primitive itself</strong> — <code>E4XNode::replace</code>, text branch — not by its
+  callers. The notification originates <em>from the newly created text node</em>:
+  <code>target</code>&nbsp;= the text node, <code>value</code>&nbsp;= the new string,
+  <code>detail</code>&nbsp;= the prior node's value (when the replaced slot held a value-kind node).
+</p>
+<p>
+  Because every path that turns a string into element content funnels through <code>[[Replace]]</code>, one
+  emission site covers them all: XML primitive assignment (<code>x.child&nbsp;=&nbsp;"s"</code>), XMLList
+  numeric put (<code>list[0]&nbsp;=&nbsp;"s"</code>), <code>XML.replace()</code> and
+  <code>setChildren()</code> with a string, and string children in <code>[[Insert]]</code>.
+</p>
+
+<figure>
+<svg viewBox="0 0 820 300" role="img" aria-labelledby="d1t d1d">
+  <title id="d1t">textSet bubbling walk</title>
+  <desc id="d1d">The textSet notification starts at the new text node and walks the parent chain; the watched item's notification function fires.</desc>
+  <text class="s-ti" x="20" y="26">item.FIELD = "new text"</text>
+  <text class="s-s" x="20" y="44">[[Replace]] creates a text node, then issues the notification from it</text>
+
+  <g>
+    <rect class="s-box" x="40" y="70" width="190" height="46" rx="6"/>
+    <text class="s-t s-mono" x="135" y="90" text-anchor="middle" font-size="11">&lt;root&gt;</text>
+    <text class="s-s" x="135" y="106" text-anchor="middle">no notification fn</text>
+
+    <rect class="s-hi" x="40" y="136" width="190" height="46" rx="6"/>
+    <text class="s-t s-mono" x="135" y="156" text-anchor="middle" font-size="11">&lt;item&gt;  (watched)</text>
+    <text class="s-acc s-s" x="135" y="172" text-anchor="middle" style="fill:var(--accent)">notification = XMLNotifier</text>
+
+    <rect class="s-box" x="40" y="202" width="190" height="46" rx="6"/>
+    <text class="s-t s-mono" x="135" y="222" text-anchor="middle" font-size="11">&lt;FIELD&gt;</text>
+    <text class="s-s" x="135" y="238" text-anchor="middle">element whose text is set</text>
+
+    <rect class="s-good" x="290" y="202" width="190" height="46" rx="6"/>
+    <text class="s-t s-mono" x="385" y="222" text-anchor="middle" font-size="11">"new text"</text>
+    <text class="s-good-f s-s" x="385" y="238" text-anchor="middle" style="fill:var(--good)">new text node = target</text>
+  </g>
+
+  <g class="s-arrow">
+    <path d="M 385 202 C 385 180, 240 176, 232 168" marker-end="url(#ah)"/>
+    <path d="M 135 136 L 135 116" marker-end="url(#ah)"/>
+  </g>
+  <line x1="135" y1="202" x2="135" y2="182" class="s-line"/>
+  <line x1="290" y1="225" x2="230" y2="225" class="s-line"/>
+  <defs>
+    <marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="var(--accent)"/></marker>
+  </defs>
+
+  <text class="s-s" x="510" y="90">walk: text node → FIELD → item → root</text>
+  <text class="s-s" x="510" y="108">each ancestor with a notification fn is invoked:</text>
+  <g class="s-mono" font-size="11">
+    <text class="s-t" x="510" y="136" font-size="11">currentTarget = &lt;item&gt;</text>
+    <text class="s-t" x="510" y="154" font-size="11">command       = "textSet"</text>
+    <text class="s-t" x="510" y="172" font-size="11">target        = text node</text>
+    <text class="s-t" x="510" y="190" font-size="11">value         = "new text"</text>
+    <text class="s-t" x="510" y="208" font-size="11">detail        = old text</text>
+  </g>
+  <text class="s-s" x="510" y="240">XMLListAdapter: target.parent().parent() === currentTarget</text>
+  <text class="s-s" x="510" y="256">⇒ prop = "FIELD" → itemUpdated(item, "FIELD", old, new)</text>
+</svg>
+<figcaption><code>textSet</code> originates at the text node; the watched grandparent's branch of
+<code>XMLListAdapter.xmlNotification</code> recovers the property name from <code>target.parent()</code>.</figcaption>
+</figure>
+
+<div class="note">
+  <span class="lbl">Fidelity note</span>
+  Assigning the <em>empty</em> string emits nothing — in Flash Player too. avmplus only calls
+  <code>[[Replace]]</code> (and therefore <code>textSet</code>) when the coerced string is non-empty; clearing
+  a field silently deletes the element's children. Consumers that must react to a cleared value need an
+  attribute or a collection-level refresh, on both runtimes.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="childchanges"><span class="n">5</span>Caller-side commands: <code>childChanges</code></h2>
+<p>
+  Structural commands are emitted by the operations, mirroring avmplus call sites one by one. The helper
+  enforcing the avmplus rules is:
+</p>
+<pre><code>// xml_object.rs — equivalent of avmplus XMLObject::childChanges
+pub fn trigger_child_changes(self, activation, command, value: Value, prior: Option&lt;E4XNode&gt;) {
+    if !self.node().notify_needed() { return; }                 // fast path (§6)
+    if value is neither XmlObject nor XmlListObject { return; } // avmplus isXML/isXMLList gate
+    let detail = prior → XmlObject wrapper, else undefined;
+    self.trigger_notification(activation, command, value, detail);
+}</code></pre>
+<table>
+  <thead><tr><th>Operation</th><th>Site</th><th>Commands emitted</th></tr></thead>
+  <tbody>
+    <tr><td><code>x.prop = value</code></td><td><code>XmlObject::set_property_local</code></td>
+      <td><code>nodeRemoved</code> for every matching child beyond the first (duplicate collapse);
+          then <code>nodeChanged</code> (slot existed) or <code>nodeAdded</code> (appended) for XML/XMLList
+          values; for primitive values on a new property, <code>nodeAdded</code> for the created element
+          followed by the <code>textSet</code> from §4</td></tr>
+    <tr><td><code>delete x.@attr</code> / <code>delete x.prop</code></td><td><code>XmlObject::delete_property_local</code></td>
+      <td><code>attributeRemoved</code> per removed attribute (name + old value);
+          <code>nodeRemoved</code> per removed child</td></tr>
+    <tr><td><code>list[i] = value</code></td><td><code>XmlListObject::set_property_local</code></td>
+      <td>slot creation emits nothing (avmplus only notifies the attribute case there); the replace
+          path notifies <code>nodeAdded</code> on the parent; XMLList values notify per inserted child:
+          <code>nodeChanged</code> for the first slot when the node actually changed, <code>nodeAdded</code>
+          for the rest — so <code>appendChild</code> yields exactly one <code>nodeAdded</code></td></tr>
+    <tr><td><code>delete list[i]</code></td><td><code>XmlListObject::delete_property_local</code></td>
+      <td><code>nodeRemoved</code> on the removed node's parent</td></tr>
+    <tr><td><code>prependChild</code>, <code>insertChildBefore/After</code></td><td><code>globals/xml.rs</code></td>
+      <td><code>nodeAdded</code> (string children instead produce the <code>textSet</code> from within
+          <code>[[Replace]]</code>, matching the avmplus XML-value gate)</td></tr>
+    <tr><td><code>XML.replace(p, v)</code></td><td><code>globals/xml.rs</code></td>
+      <td><code>nodeRemoved</code> for collapsed duplicates, then <code>nodeChanged</code>/<code>nodeAdded</code></td></tr>
+    <tr><td><code>normalize()</code></td><td><code>E4XNode::normalize</code></td>
+      <td><code>nodeRemoved</code> per merged-away or whitespace-dropped text node, then <code>textSet</code>
+          from the surviving text node when merging changed its value (avmplus <code>AS3_normalize</code>)</td></tr>
+    <tr><td><code>addNamespace</code> / <code>removeNamespace</code> / <code>setNamespace</code></td><td><code>globals/xml.rs</code></td>
+      <td><code>namespaceAdded</code> / <code>namespaceRemoved</code> / <code>namespaceSet</code></td></tr>
+  </tbody>
+</table>
+<p>
+  To report the collapsed duplicates, <code>E4XNode::remove_matching_children</code> and
+  <code>remove_matching_attribute</code> now return, along with the first match and its index, the full list
+  of removed nodes in document order.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="fastpath"><span class="n">6</span>The <code>notify_needed</code> fast path</h2>
+<p>
+  avmplus guards every emission with <code>XMLObject::notifyNeeded</code> — a walk up the parent chain
+  checking for a non-null notification function — before allocating wrapper objects and argument lists. The
+  branch replicates it as <code>E4XNode::notify_needed()</code>.
+</p>
+<p>
+  On unwatched trees (the overwhelmingly common case: parsers, data pipelines, read-mostly providers) every
+  new emission site reduces to that pointer walk, or to nothing at all where the check was already needed for
+  other reasons. No wrapper objects, no argument marshalling, no interned-string lookups are performed unless
+  a notification function is actually reachable.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="reentrancy"><span class="n">7</span>Re-entrancy &amp; borrow discipline</h2>
+<p class="lead">
+  A notification is a <strong>synchronous call into arbitrary AS3</strong> in the middle of a mutation. In
+  Flex that callback chain is XMLNotifier → XMLListAdapter → <code>itemUpdated</code> →
+  <code>COLLECTION_CHANGE</code> → framework handlers that routinely <em>read the same XML tree</em>.
+</p>
+<p>
+  Ruffle's E4X node internals live in <code>RefLock</code> cells: invoking AS3 while a
+  <code>kind_mut()</code> / <code>children_mut()</code> borrow is outstanding turns the first framework
+  read-back into a <code>RefCell</code> double-borrow panic. The rule adopted throughout the branch:
+</p>
+<div class="note warn">
+  <span class="lbl">Rule</span>
+  A notification may only be emitted when <strong>no borrow of any node's interior state is live</strong> and
+  the tree is in a <strong>consistent</strong> state (in particular, never while a placeholder
+  <code>dummy</code> node from the two-phase replace idiom is still reachable).
+</div>
+<p>Concretely, three pre-existing spots were restructured because they would have panicked once their inner
+   <code>[[Replace]]</code> started emitting <code>textSet</code>:</p>
+<ul>
+  <li><code>XmlObject::set_property_local</code>, step 13 — the target child is now extracted in a closed
+    scope before <code>remove_all_children</code>/<code>replace</code> run, instead of holding the parent's
+    <code>kind_mut</code> across the call;</li>
+  <li><code>XmlListObject::delete_property_local</code> — the numeric removal happens in its own scope, the
+    notification after it; the recursive non-numeric path collects the child nodes first and iterates without
+    holding the list borrow;</li>
+  <li><code>XmlListObject::set_property_local</code>, step 3.b — the delegating <code>[[Put]]</code> no longer
+    runs with the list's <code>RefMut</code> alive (the borrow is now scoped to the child lookup statement).</li>
+</ul>
+<p>
+  Emission points are placed <em>after</em> the mutation completes (avmplus does the same), so a callback that
+  re-enters E4X — even one that mutates the same node again, recursively — observes a consistent tree.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="flex"><span class="n">8</span>How Flex consumes the notifications</h2>
+<p>
+  The full binding chain that this branch unblocks, end to end:
+</p>
+
+<figure>
+<svg viewBox="0 0 820 216" role="img" aria-labelledby="d2t d2d">
+  <title id="d2t">Flex data-binding chain</title>
+  <desc id="d2d">Two-way binding writes the XML, the textSet notification reaches XMLListAdapter, a collection event refreshes the renderers and re-runs dependent bindings.</desc>
+  <g text-anchor="middle">
+    <rect class="s-box"  x="16"  y="34" width="148" height="52" rx="6"/>
+    <text class="s-h" x="90" y="56">two-way binding</text>
+    <text class="s-s" x="90" y="72">item.FIELD = text</text>
+
+    <rect class="s-hi"  x="188" y="34" width="148" height="52" rx="6"/>
+    <text class="s-h" x="262" y="56">textSet</text>
+    <text class="s-s" x="262" y="72">E4XNode::replace</text>
+
+    <rect class="s-box" x="360" y="34" width="148" height="52" rx="6"/>
+    <text class="s-h" x="434" y="56">XMLNotifier</text>
+    <text class="s-s" x="434" y="72">watched item fn</text>
+
+    <rect class="s-box" x="532" y="34" width="148" height="52" rx="6"/>
+    <text class="s-h" x="606" y="56">XMLListAdapter</text>
+    <text class="s-s" x="606" y="72">xmlNotification</text>
+
+    <rect class="s-box" x="16" y="130" width="148" height="52" rx="6"/>
+    <text class="s-h" x="90" y="152">itemUpdated</text>
+    <text class="s-s" x="90" y="168">PropertyChangeEvent</text>
+
+    <rect class="s-box" x="188" y="130" width="148" height="52" rx="6"/>
+    <text class="s-h" x="262" y="152">COLLECTION_CHANGE</text>
+    <text class="s-s" x="262" y="168">kind = UPDATE</text>
+
+    <rect class="s-box" x="360" y="130" width="148" height="52" rx="6"/>
+    <text class="s-h" x="434" y="152">DataGrid</text>
+    <text class="s-s" x="434" y="168">re-sets renderer data</text>
+
+    <rect class="s-good" x="532" y="130" width="148" height="52" rx="6"/>
+    <text class="s-h" x="606" y="152">bindings re-run</text>
+    <text class="s-s" x="606" y="168">enabled, labels, …</text>
+  </g>
+  <g class="s-arrow">
+    <line x1="164" y1="60" x2="182" y2="60" marker-end="url(#ah2)"/>
+    <line x1="336" y1="60" x2="354" y2="60" marker-end="url(#ah2)"/>
+    <line x1="508" y1="60" x2="526" y2="60" marker-end="url(#ah2)"/>
+    <path d="M 680 86 C 700 108, 220 96, 96 124" marker-end="url(#ah2)"/>
+    <line x1="164" y1="156" x2="182" y2="156" marker-end="url(#ah2)"/>
+    <line x1="336" y1="156" x2="354" y2="156" marker-end="url(#ah2)"/>
+    <line x1="508" y1="156" x2="526" y2="156" marker-end="url(#ah2)"/>
+  </g>
+  <defs>
+    <marker id="ah2" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="var(--accent)"/></marker>
+  </defs>
+</svg>
+<figcaption>The highlighted hop is the one this branch adds; everything downstream is stock Flex.</figcaption>
+</figure>
+
+<p>
+  Two details worth keeping in mind when debugging bindings on top of this chain:
+</p>
+<ul>
+  <li><code>XMLListAdapter.xmlNotification</code> calls <code>itemUpdated</code>
+    <em>unconditionally</em> — the command-specific <code>switch</code> only refines the property name and
+    old/new values placed in the <code>PropertyChangeEvent</code>. Any notification reaching the adapter
+    produces an UPDATE.</li>
+  <li>Attribute writes worked before this branch; that asymmetry is why attribute-driven screens (tree
+    checkboxes toggling <code>@visible</code>) behaved while element-text screens did not — a useful signature
+    for recognizing the class of bug this branch removes.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="limitations"><span class="n">9</span>Known limitations</h2>
+<ul>
+  <li><strong>Ordering deviations on multi-event operations.</strong> When a named <code>replace()</code> or a
+    property set collapses duplicate children <em>and</em> replaces content, the <code>nodeRemoved</code>
+    events may be observed after the <code>textSet</code>/<code>nodeChanged</code> rather than before —
+    a consequence of only emitting on a consistent tree (§7). The event <em>set</em> matches avmplus; the
+    interleaving may not, byte for byte.</li>
+  <li><strong>XMLList empty-attribute creation.</strong> avmplus emits an early <code>attributeAdded</code>
+    (no detail) when <code>list[i]</code> materializes an empty attribute, then an
+    <code>attributeChanged</code> when the value lands. Ruffle's flow adds the attribute and its value in one
+    step, emitting a single <code>attributeAdded</code> carrying the final value — same net observable state,
+    one event instead of two.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="tests"><span class="n">10</span>Tests</h2>
+<ul>
+  <li><code>tests/swfs/from_avmplus/e4x/XML/setNotification</code> — the ported avmplus coverage test
+    (attribute add/change/remove, nodeAdded/Changed/Removed, textSet, nameSet, namespaceSet, and the
+    <code>#1034</code> type check). Previously <code>known_failure&nbsp;=&nbsp;true</code>; the flag is
+    removed on this branch.</li>
+  <li><code>tests/swfs/avm2/xml_notification_bubbling</code> — upstream test pinning the exact
+    currentTarget/target/value/detail traces for attribute commands and <code>nameSet</code> across a
+    multi-level watch. Those paths are untouched (the attribute branch only changed a destructuring) and the
+    test must stay green.</li>
+</ul>
+<pre><code>cargo test -p tests --test regression_tests -- setNotification xml_notification</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="appendix-a"><span class="n">A</span>Appendix — changes by file</h2>
+<table>
+  <thead><tr><th>File</th><th>Change</th></tr></thead>
+  <tbody>
+    <tr><td><code>core/common/src/avm_string/common.rs</code></td>
+      <td>8 new interned command strings (<code>attributeRemoved</code>, <code>namespaceAdded/Removed/Set</code>,
+          <code>nodeAdded/Changed/Removed</code>, <code>textSet</code>)</td></tr>
+    <tr><td><code>avm2/e4x.rs</code></td>
+      <td><code>notify_needed()</code> and <code>node_value()</code> helpers on <code>E4XNode</code>;
+          <code>remove_matching_children/attribute</code> also return the removed nodes;
+          <code>[[Replace]]</code> text branch captures the prior value in a closed scope and emits
+          <code>textSet</code> from the new text node; <code>normalize()</code> rewritten to short
+          per-iteration borrows so it can emit <code>nodeRemoved</code> per dropped/merged-away text node
+          and <code>textSet</code> from the surviving node, matching avmplus <code>AS3_normalize</code></td></tr>
+    <tr><td><code>avm2/object/xml_object.rs</code></td>
+      <td><code>NotificationCommand</code> grows from 3 to 11 variants; new
+          <code>trigger_child_changes</code> helper; <code>set_property_local</code> emits
+          nodeRemoved/nodeAdded/nodeChanged around steps 11–14 (step 13 restructured for §7);
+          <code>delete_property_local</code> emits <code>attributeRemoved</code>/<code>nodeRemoved</code>
+          after its borrows close</td></tr>
+    <tr><td><code>avm2/object/xml_list_object.rs</code></td>
+      <td>numeric put: <code>nodeAdded</code> on the replace path, per-child
+          <code>nodeChanged</code>/<code>nodeAdded</code> for XMLList values (avmplus
+          <code>setUintProperty</code>); numeric delete: <code>nodeRemoved</code>; borrow-scoping fixes in
+          delete and in the delegating 3.b path</td></tr>
+    <tr><td><code>avm2/globals/xml.rs</code></td>
+      <td><code>nodeAdded</code> on <code>prependChild</code>/<code>insertChildBefore/After</code>;
+          <code>replace()</code> emits nodeRemoved + nodeChanged/nodeAdded;
+          <code>namespaceAdded/Removed/Set</code> on the namespace methods; <code>setNotification</code>
+          stub marker removed</td></tr>
+    <tr><td><code>tests/…/setNotification/test.toml</code></td>
+      <td><code>known_failure</code> removed</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="appendix-b"><span class="n">B</span>Appendix — new internal API</h2>
+<table>
+  <thead><tr><th>Symbol</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr><td><code>E4XNode::notify_needed() -&gt; bool</code></td>
+      <td>avmplus <code>notifyNeeded</code>: parent-chain walk deciding whether any notification argument
+          needs to be built at all</td></tr>
+    <tr><td><code>E4XNode::node_value() -&gt; Option&lt;AvmString&gt;</code></td>
+      <td>the string carried by value-kind nodes (text, CDATA, comment, PI, attribute); <code>None</code> for
+          elements — used for <code>textSet</code>/<code>attributeRemoved</code> details</td></tr>
+    <tr><td><code>XmlObject::trigger_child_changes(…)</code></td>
+      <td>avmplus <code>childChanges</code>: gates on <code>notify_needed</code> and on the value being
+          XML/XMLList, wraps the prior node as detail, then dispatches through
+          <code>trigger_notification</code></td></tr>
+    <tr><td><code>NotificationCommand::{AttributeRemoved, NamespaceAdded, NamespaceRemoved, NamespaceSet, NodeAdded, NodeChanged, NodeRemoved, TextSet}</code></td>
+      <td>the 8 new command variants, each mapped to its interned command string in
+          <code>trigger_notification</code></td></tr>
+  </tbody>
+</table>
+
+<div class="footer">
+  Self-contained document — no external dependencies (all diagrams are inline SVG). Light/dark theme follows
+  <code>prefers-color-scheme</code>. Editable directly as a text file.
+</div>
+
+</div>
+</body>
+</html>
