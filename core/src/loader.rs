@@ -1367,12 +1367,18 @@ pub fn load_data_into_url_loader<'gc>(
 pub fn load_data_into_url_stream<'gc>(
     uc: &UpdateContext<'gc>,
     target: Avm2ScriptObject<'gc>,
-    request: Request,
+    mut request: Request,
 ) -> OwnedFuture<(), Error> {
     let player = uc.player_handle();
     let target = Avm2ScriptObjectHandle::stash(uc, target);
 
     Box::pin(async move {
+        // HTTP error statuses (4xx/5xx) must still deliver their body so the
+        // caller can consume it (e.g. a SOAP fault carried on a 500): the
+        // real status is reported by the httpStatus event and the load then
+        // completes normally (see the completion dispatch below).
+        request.set_expose_http_errors(true);
+
         // Use `FetchReason::UrlLoader` so the same compatibility rewrites
         // (e.g. fpdownload.adobe.com -> cdn.ruffle.rs) apply to URLStream
         // requests as well, since the two APIs are semantically equivalent
@@ -1534,6 +1540,13 @@ pub fn load_data_into_url_stream<'gc>(
 
         // Success path: dispatch COMPLETE after all chunks have been
         // appended. We also drop `connected` here per Adobe semantics.
+        //
+        // NOTE (deliberate divergence from FP/AIR): requests that failed
+        // with an HTTP status error (4xx/5xx) take this same path and
+        // complete normally — the status was reported by the earlier
+        // httpStatus event and the body stays readable. Genuine Flash would
+        // fire `ioError` instead; completing lets consumers handle every
+        // response that carries a body in a single place.
         player.lock().unwrap().update(|uc| {
             let target = Avm2Object::from(target.fetch(uc));
             if is_url_stream_closed(uc, target) {

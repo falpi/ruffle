@@ -260,7 +260,7 @@ impl<F: FutureSpawner<Error> + 'static, I: NavigatorInterface> NavigatorBackend
                     .and_then(get_encoding);
                 let status = response.status().as_u16();
                 let redirected = *response.url() != processed_url;
-                if !response.status().is_success() {
+                if !response.status().is_success() && !request.expose_http_errors() {
                     let error = Error::HttpNotOk(
                         format!("Got {}", response.status()),
                         status,

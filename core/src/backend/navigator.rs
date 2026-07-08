@@ -137,6 +137,17 @@ pub struct Request {
     /// to give us a consistent order - hopefully, no servers depend on
     /// the order of headers.
     headers: IndexMap<String, String>,
+
+    /// Whether HTTP responses with an error status code (4xx/5xx) should be
+    /// delivered as a [`SuccessResponse`] instead of an [`ErrorResponse`].
+    ///
+    /// Backends normally discard the body of a failed HTTP request. When this
+    /// flag is set they return the response as-is — with
+    /// [`SuccessResponse::status`] reporting the error code — so the caller
+    /// can consume the body and decide how to surface the failure. This
+    /// mirrors AIR, where `URLStream`/`URLLoader` keep the received data
+    /// readable when a request fails with an HTTP status error.
+    expose_http_errors: bool,
 }
 
 impl Request {
@@ -147,6 +158,7 @@ impl Request {
             method: NavigationMethod::Get,
             body: None,
             headers: Default::default(),
+            expose_http_errors: false,
         }
     }
 
@@ -157,6 +169,7 @@ impl Request {
             method: NavigationMethod::Post,
             body,
             headers: Default::default(),
+            expose_http_errors: false,
         }
     }
 
@@ -168,6 +181,7 @@ impl Request {
             method,
             body,
             headers: Default::default(),
+            expose_http_errors: false,
         }
     }
 
@@ -200,6 +214,16 @@ impl Request {
 
     pub fn set_headers(&mut self, headers: IndexMap<String, String>) {
         self.headers = headers;
+    }
+
+    /// Whether HTTP error responses (4xx/5xx) should be delivered as a
+    /// [`SuccessResponse`] so their body remains consumable.
+    pub fn expose_http_errors(&self) -> bool {
+        self.expose_http_errors
+    }
+
+    pub fn set_expose_http_errors(&mut self, value: bool) {
+        self.expose_http_errors = value;
     }
 }
 
