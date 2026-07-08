@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en" data-doc="add-font-text-engine-implementation">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flash Text Engine — implementation &amp; coverage</title>
+<style>
+  :root{
+    --bg:#ffffff; --surface:#f6f6f4; --surface2:#efeee9;
+    --text:#1d1d1b; --text2:#5f5e5a;
+    --border:#d3d1c7; --border2:#b4b2a9;
+    --accent:#534ab7; --accent-soft:#7f77dd;
+    --good:#1d9e75; --warn:#d85a30; --info:#378add;
+    --code-bg:#f1efe8;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#1a1a18; --surface:#242420; --surface2:#2c2c28;
+      --text:#ecece9; --text2:#b4b2a9;
+      --border:#444441; --border2:#5f5e5a;
+      --accent:#afa9ec; --accent-soft:#7f77dd;
+      --good:#5dcaa5; --warn:#f0997b; --info:#85b7eb;
+      --code-bg:#26261f;
+    }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:16px; line-height:1.65;
+  }
+  .wrap{max-width:900px; margin:0 auto; padding:48px 28px 96px}
+  header.doc{border-bottom:1px solid var(--border); padding-bottom:24px; margin-bottom:8px}
+  header.doc h1{font-size:30px; margin:0 0 6px; letter-spacing:-.01em}
+  header.doc .sub{color:var(--text2); font-size:15px}
+  header.doc .meta{color:var(--text2); font-size:13px; margin-top:14px}
+  header.doc .meta code{font-size:12px}
+  h2{font-size:23px; margin:52px 0 4px; letter-spacing:-.01em; scroll-margin-top:20px}
+  h2 .n{color:var(--accent); font-variant-numeric:tabular-nums; margin-right:10px}
+  h3{font-size:17px; margin:28px 0 4px}
+  p{margin:12px 0}
+  a{color:var(--accent)}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.88em;
+    background:var(--code-bg); padding:.12em .4em; border-radius:4px}
+  pre{background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+    padding:14px 16px; overflow:auto; font-size:13px; line-height:1.5}
+  pre code{background:none; padding:0}
+  .lead{font-size:18px; color:var(--text)}
+  ul,ol{padding-left:22px} li{margin:5px 0}
+  nav.toc{background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:18px 22px; margin:28px 0 8px}
+  nav.toc strong{display:block; font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--text2); margin-bottom:8px}
+  nav.toc ol{margin:0; columns:2; column-gap:32px}
+  nav.toc a{text-decoration:none; color:var(--text)}
+  nav.toc a:hover{color:var(--accent)}
+  .note{border-left:3px solid var(--accent); background:var(--surface);
+    padding:12px 16px; border-radius:0 8px 8px 0; margin:18px 0; font-size:15px}
+  .note.good{border-color:var(--good)}
+  .note.warn{border-color:var(--warn)}
+  .note .lbl{font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--text2); display:block; margin-bottom:2px}
+  figure{margin:24px 0; background:var(--surface); border:1px solid var(--border);
+    border-radius:10px; padding:20px}
+  figure svg{display:block; width:100%; height:auto}
+  figcaption{color:var(--text2); font-size:13px; margin-top:12px; text-align:center}
+  table{width:100%; border-collapse:collapse; margin:20px 0; font-size:14px}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:top}
+  th{font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--text2);
+    border-bottom:2px solid var(--border2)}
+  td.num,th.num{text-align:right; font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,monospace}
+  tr.sum td{font-weight:600; border-top:2px solid var(--border2); background:var(--surface)}
+  .neg{color:var(--warn); font-weight:600}
+  .pos{color:var(--good); font-weight:600}
+  td code{white-space:nowrap}
+  .pill{font-size:11px; font-weight:600; padding:.08em .5em; border-radius:20px;
+    font-variant-numeric:tabular-nums; white-space:nowrap}
+  .st-real{color:var(--good)} .st-partial{color:var(--info)}
+  .st-stub{color:var(--warn)} .st-missing{color:var(--text2)}
+  svg text{font-family:ui-sans-serif,system-ui,sans-serif}
+  .s-ti{font-weight:600; fill:var(--text); font-size:14px}
+  .s-h{font-weight:600; fill:var(--text); font-size:12px}
+  .s-t{fill:var(--text); font-size:12px}
+  .s-s{fill:var(--text2); font-size:10px}
+  .s-mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+  .s-box{fill:var(--bg); stroke:var(--border2); stroke-width:1.5}
+  .s-surf{fill:var(--surface2); stroke:var(--border2); stroke-width:1.2}
+  .s-hi{fill:var(--accent); fill-opacity:.14; stroke:var(--accent); stroke-width:1.5}
+  .s-good{fill:var(--good); fill-opacity:.16; stroke:var(--good); stroke-width:1.5}
+  .s-warn{fill:var(--warn); fill-opacity:.16; stroke:var(--warn); stroke-width:1.5}
+  .s-info{fill:var(--info); fill-opacity:.16; stroke:var(--info); stroke-width:1.5}
+  .s-line{stroke:var(--border2); stroke-width:1.5; fill:none}
+  .s-arrow{stroke:var(--accent); stroke-width:1.6; fill:none}
+  .s-acc{fill:var(--accent)} .s-good-f{fill:var(--good)} .s-warn-f{fill:var(--warn)} .s-info-f{fill:var(--info)}
+  .s-dash{stroke-dasharray:4 4}
+  .footer{margin-top:64px; padding-top:20px; border-top:1px solid var(--border);
+    color:var(--text2); font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <h1>Flash Text Engine</h1>
+  <div class="sub">A real line-breaking, metrics, hit-testing and justification implementation for <code>flash.text.engine</code>, grafted onto the native <code>TextBlock</code> object.</div>
+  <div class="meta">
+    Ruffle · AVM2 <code>flash.text.engine</code> &nbsp;·&nbsp; branch <code>add-font-text-engine-implementation</code> &nbsp;·&nbsp;
+    ~1,000 lines across 14 files &nbsp;·&nbsp; single self-contained file (every diagram is inline SVG, no external dependencies).
+  </div>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#pipeline">The composition pipeline</a></li>
+    <li><a href="#coords">Metrics &amp; the baseline origin</a></li>
+    <li><a href="#chain">The line chain &amp; native TextBlock</a></li>
+    <li><a href="#validity">The validity state machine</a></li>
+    <li><a href="#hittest">Hit-testing — caret &amp; selection</a></li>
+    <li><a href="#justify">Justification</a></li>
+    <li><a href="#coverage">API coverage</a></li>
+    <li><a href="#gaps">Uncovered capabilities</a></li>
+    <li><a href="#appendix">Appendix — files &amp; types</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="overview"><span class="n">1</span>Overview</h2>
+<p class="lead">
+  Ruffle shipped <code>flash.text.engine</code> (FTE) as a shell: the constant classes existed, but
+  <code>TextBlock.createTextLine</code> was a stub that faked a single line, so anything built on FTE — the whole
+  <code>flashx.textLayout</code> (Text Layout Framework) stack that Spark <code>RichText</code>, <code>Label</code>,
+  <code>TextInput</code> and <code>TextArea</code> compose their text with — rendered nothing usable.
+</p>
+<p>
+  This branch turns FTE into a working <strong>text-composition engine</strong>: real line breaking, real line
+  metrics, a real line chain, caret hit-testing and paragraph justification — enough that the Spark text controls a
+  Flex enterprise application depends on <em>compose, measure, wrap and edit</em> correctly. It is built on the
+  <strong>native <code>TextBlock</code> object</strong>: upstream refactored <code>TextBlock</code>'s storage from
+  AS3 slots to a native Rust <code>TextBlockObject</code> (allocator + native getters/setters), and the composition
+  logic here is grafted directly onto that native model rather than onto AS3 slots.
+</p>
+<div class="note good">
+  <span class="lbl">The headline</span>
+  Spark <code>RichText</code> / <code>Label</code> / <code>TextInput</code> / <code>TextArea</code> now compose,
+  wrap, measure, justify and edit real text, with a working caret and word selection — the FTE surface a typical
+  Flex business application exercises is functional. The gaps that remain (§9) are advanced typography and
+  specialized layout, not the everyday composition path.
+</div>
+
+<h3 id="delta">What upstream provided, and what this branch adds</h3>
+<p>
+  Upstream Ruffle shipped the FTE <strong>type system</strong> — all 32 classes, the eighteen constant/enum
+  classes, the formatting and justifier data holders, and (recently) native <code>TextBlock</code> storage — but no
+  <strong>composition</strong>: <code>TextBlock.createTextLine</code> was a stub that faked a single line, and
+  <code>TextLine</code>'s metrics and hit-testing were stub getters (there was no native <code>text_line.rs</code>
+  module at all). The package was type-complete but inert. Everything this branch contributes is the
+  <strong>composition engine</strong> — ~1,000 lines concentrated in <code>TextBlock</code> and <code>TextLine</code>
+  — that turns that inert type system into working text. It does not touch the enum classes,
+  <code>ElementFormat</code>, <code>FontDescription</code>, <code>FontMetrics</code>, the justifiers,
+  <code>TabStop</code> or the content-element types; those were already present.
+</p>
+<table>
+  <colgroup><col style="width:44%"><col style="width:28%"><col style="width:28%"></colgroup>
+  <thead><tr><th>Area</th><th>Upstream (before)</th><th>This branch (after)</th></tr></thead>
+  <tbody>
+    <tr><td><code>createTextLine</code> / <code>recreateTextLine</code></td><td class="st-stub">stub — fakes a single line</td><td class="st-real">real line breaking over the content, reusing the core layout engine</td></tr>
+    <tr><td>Line metrics — <code>ascent</code> / <code>descent</code> / <code>textWidth</code> / <code>textHeight</code></td><td class="st-stub">stub getters (placeholders)</td><td class="st-real">real, measured from the backing field</td></tr>
+    <tr><td>Hit-testing — <code>getAtomIndexAtPoint</code> / <code>getAtomBounds</code> / <code>getAtomIndexAtCharIndex</code> / <code>getAtomWordBoundaryOnLeft</code></td><td class="st-stub">stubs (return −1 / placeholder)</td><td class="st-real">real caret placement &amp; word selection</td></tr>
+    <tr><td>Line chain — <code>firstLine</code> / <code>lastLine</code> / <code>firstInvalidLine</code>, <code>nextLine</code> / <code>previousLine</code></td><td class="st-stub"><code>lastLine</code> stub, no walkable chain</td><td class="st-real">real chain with native endpoints</td></tr>
+    <tr><td><code>releaseLines</code></td><td class="st-partial">single-line only (stub for ranges)</td><td class="st-real">full — ranges, #2004 validation, relink</td></tr>
+    <tr><td><code>content=</code> / <code>bidiLevel=</code> line invalidation</td><td class="st-missing">none</td><td class="st-real">invalidates the line chain</td></tr>
+    <tr><td>Justification (<code>SpaceJustifier</code>)</td><td class="st-missing">none</td><td class="st-real">width-justify via the core Justify pass</td></tr>
+    <tr><td>Atom / word boundary — <code>findNext/PreviousAtomBoundary</code>, <code>findNext/PreviousWordBoundary</code></td><td class="st-missing">absent</td><td class="st-real">present</td></tr>
+    <tr><td><code>TextLine.validity</code> state machine</td><td class="st-partial">native get/set, no real rules</td><td class="st-real">full restricted transitions (#2008)</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="pipeline"><span class="n">2</span>The composition pipeline</h2>
+<p>
+  <code>TextBlock.createTextLine(previousLine, width)</code> and <code>recreateTextLine</code> are native
+  (<code>text_block.rs::break_text_line</code>). Rather than reimplement shaping and wrapping, <code>break_text_line</code>
+  <strong>reuses Ruffle's existing text layout engine</strong> — the same one that lays out classic
+  <code>TextField</code> / <code>htmlText</code>:
+</p>
+<ol>
+  <li><strong>Flatten.</strong> <code>collect_spans</code> walks the block's content-element tree into one
+    <code>WString</code> plus a list of format runs. A <code>GroupElement</code> recurses over its children; a
+    <code>GraphicElement</code> contributes a single U+FDEF placeholder character, as in Flash Player.</li>
+  <li><strong>Lay out the remainder.</strong> The text after <code>previousLine</code> is laid out at the requested
+    width via <code>lower_from_text_spans</code> (word-wrap on).</li>
+  <li><strong>Take the first break.</strong> The break point for the new line is the <em>start of the second
+    laid-out line</em> (<code>lines[1].start()</code>); everything up to it — including trailing whitespace and the
+    line terminator — is consumed by the new <code>TextLine</code>.</li>
+  <li><strong>Back it with a field.</strong> Each <code>TextLine</code> is backed by an <code>EditText</code>
+    "fallback" holding exactly that one line's text and formats; the fallback performs the actual glyph layout and
+    rendering.</li>
+</ol>
+<p>
+  The block's <code>textLineCreationResult</code> reports the outcome:
+  <code>success</code>, <code>complete</code> (all text consumed), <code>insufficientWidth</code> (not even one atom
+  fits and <code>fitSomething</code> is false), or <code>emergency</code> (a word longer than the width had to be
+  broken mid-word).
+</p>
+
+<figure>
+<svg viewBox="0 0 820 250" role="img" aria-labelledby="p1t p1d">
+  <title id="p1t">createTextLine breaks one line out of the block</title>
+  <desc id="p1d">The content tree is flattened, the remaining text is laid out at the requested width, and the break is taken at the start of the second line.</desc>
+  <defs><marker id="ap" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="var(--accent)"/></marker></defs>
+
+  <rect class="s-box" x="20" y="30" width="150" height="52" rx="6"/>
+  <text class="s-h" x="95" y="52" text-anchor="middle">TextBlock.content</text>
+  <text class="s-s" x="95" y="70" text-anchor="middle">element tree</text>
+  <path class="s-arrow" d="M170 56 L205 56" marker-end="url(#ap)"/>
+
+  <rect class="s-surf" x="205" y="30" width="150" height="52" rx="6"/>
+  <text class="s-h" x="280" y="52" text-anchor="middle">collect_spans</text>
+  <text class="s-s" x="280" y="70" text-anchor="middle">text + format runs</text>
+  <path class="s-arrow" d="M355 56 L390 56" marker-end="url(#ap)"/>
+
+  <rect class="s-surf" x="390" y="30" width="180" height="52" rx="6"/>
+  <text class="s-h" x="480" y="52" text-anchor="middle">lower_from_text_spans</text>
+  <text class="s-s" x="480" y="70" text-anchor="middle">core layout @ width, wrap on</text>
+  <path class="s-arrow" d="M480 82 L480 112" marker-end="url(#ap)"/>
+
+  <!-- laid out lines -->
+  <text class="s-s" x="205" y="108">laid-out lines (only the first is kept)</text>
+  <rect class="s-hi" x="205" y="114" width="360" height="22" rx="3"/>
+  <text class="s-t s-mono" x="214" y="130" font-size="11">line 0  — kept as the new TextLine</text>
+  <rect class="s-box" x="205" y="140" width="360" height="20" rx="3"/>
+  <text class="s-s s-mono" x="214" y="154" font-size="11">line 1  — its start() is the break point</text>
+  <rect class="s-box" x="205" y="164" width="360" height="18" rx="3"/>
+  <text class="s-s s-mono" x="214" y="177" font-size="10">…</text>
+  <line x1="205" y1="140" x2="205" y2="140"/>
+  <path class="s-arrow s-dash" d="M205 150 C 150 150, 150 200, 205 200" marker-end="url(#ap)"/>
+  <text class="s-s" x="120" y="178" text-anchor="middle">break =</text>
+  <text class="s-s" x="120" y="190" text-anchor="middle">lines[1].start()</text>
+
+  <path class="s-arrow" d="M565 125 L600 125" marker-end="url(#ap)"/>
+  <rect class="s-good" x="600" y="100" width="200" height="52" rx="6"/>
+  <text class="s-h" x="700" y="122" text-anchor="middle">new TextLine</text>
+  <text class="s-s" x="700" y="140" text-anchor="middle">backed by an EditText fallback</text>
+
+  <text class="s-s" x="600" y="196">result: success · complete · insufficientWidth · emergency</text>
+</svg>
+<figcaption>One <code>createTextLine</code> call lays out the whole remaining text, keeps line 0, and records where line 1 began as the break; the caller loops, passing each line back in as <code>previousLine</code>.</figcaption>
+</figure>
+
+<div class="note">
+  <span class="lbl">Cost</span>
+  Laying out the whole remainder to take just the first break is <strong>O(N²)</strong> in the block's text length.
+  That is fine for the FTE workloads a Flex app produces (labels, form fields, short paragraphs); very large blocks
+  are a known optimization TODO.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="coords"><span class="n">3</span>Metrics &amp; the baseline origin</h2>
+<p>
+  <code>TextLine.ascent</code>, <code>descent</code>, <code>textWidth</code> and <code>textHeight</code> are real,
+  extracted from the backing field's layout into <code>LineMetrics { ascent, descent, text_width }</code>. The
+  subtlety is the <strong>coordinate origin</strong>. A <code>TextLine</code>'s origin is the <em>start of its
+  baseline</em> — text extends to the right and mostly upward — whereas the backing <code>EditText</code>'s origin
+  is its top-left corner, inset by the gutter. So both <code>render_self</code> and <code>self_bounds</code>
+  translate the fallback by
+</p>
+<pre><code>fallback_offset = (-gutter, -(gutter + ascent))</code></pre>
+<p>
+  which drops the fallback so its baseline lands exactly on the line origin, like Flash Player. This single offset
+  is the linchpin: rendering, bounds, and every hit-test (§6) are all expressed relative to it, so they land on the
+  same pixels.
+</p>
+
+<figure>
+<svg viewBox="0 0 820 240" role="img" aria-labelledby="c1t c1d">
+  <title id="c1t">The TextLine baseline origin vs the fallback field</title>
+  <desc id="c1d">The line origin sits on the baseline; the backing EditText is translated up and left by the gutter plus ascent so its baseline coincides.</desc>
+  <!-- fallback field box -->
+  <rect class="s-surf s-dash" x="150" y="40" width="470" height="130" rx="4"/>
+  <text class="s-s" x="360" y="34" text-anchor="middle">backing EditText (origin = top-left, gutter-inset)</text>
+  <!-- gutter inset -->
+  <rect class="s-box" x="168" y="58" width="434" height="94" rx="2" fill="none"/>
+  <!-- baseline -->
+  <line x1="168" y1="120" x2="602" y2="120" stroke="var(--accent)" stroke-width="1.5"/>
+  <text class="s-acc" x="606" y="124" font-size="11">baseline</text>
+  <!-- glyphs -->
+  <text class="s-t s-mono" x="176" y="118" font-size="26" fill="var(--text)">Ruffle</text>
+  <!-- ascent / descent brackets -->
+  <line x1="176" y1="86" x2="176" y2="120" stroke="var(--good)" stroke-width="1.5"/>
+  <text class="s-good-f" x="120" y="100" font-size="11" text-anchor="end">ascent</text>
+  <line x1="176" y1="120" x2="176" y2="138" stroke="var(--warn)" stroke-width="1.5"/>
+  <text class="s-warn-f" x="120" y="136" font-size="11" text-anchor="end">descent</text>
+  <!-- line origin dot -->
+  <circle cx="168" cy="120" r="4.5" fill="var(--accent)"/>
+  <text class="s-acc" x="168" y="200" text-anchor="middle" font-size="11">TextLine origin</text>
+  <text class="s-s" x="168" y="214" text-anchor="middle">(0,0) = baseline start</text>
+  <!-- offset arrow -->
+  <path class="s-arrow s-dash" d="M150 44 L168 118" marker-end="url(#ac)"/>
+  <defs><marker id="ac" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="var(--accent)"/></marker></defs>
+  <text class="s-s" x="70" y="60">translate</text>
+  <text class="s-s s-mono" x="40" y="74" font-size="10">(-gutter, -(gutter+ascent))</text>
+</svg>
+<figcaption>Flash Player places a <code>TextLine</code> by its baseline; Ruffle re-homes the gutter-based fallback onto that baseline so display-object coordinates match FP.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="chain"><span class="n">4</span>The line chain &amp; native TextBlock</h2>
+<p>
+  Upstream nativized <code>TextBlock</code> into a <code>TextBlockObject</code>. The composed lines live in that
+  native object: <code>first_line</code> and <code>last_line</code> are native fields, and each <code>TextLine</code>
+  carries <code>_nextLine</code> / <code>_previousLine</code> / <code>_textBlockBeginIndex</code> /
+  <code>_rawTextLength</code> slots. <code>firstLine</code>, <code>lastLine</code>, <code>firstInvalidLine</code> and
+  <code>textLineCreationResult</code> read this chain.
+</p>
+<ul>
+  <li><code>createTextLine(null, w)</code> starts a fresh chain (the new line becomes <code>firstLine</code>).</li>
+  <li><code>createTextLine(prev, w)</code> continues from where <code>prev</code> ended
+    (<code>prev.textBlockBeginIndex + prev.rawTextLength</code>), linking the new line after it.</li>
+  <li><code>recreateTextLine(line, …)</code> reuses a recycled <code>TextLine</code> object in place instead of
+    allocating a new one — the Text Layout Framework pools lines this way.</li>
+  <li><code>releaseLines(first, last)</code> detaches an inclusive range, relinks the surrounding chain, and updates
+    the block's native <code>first_line</code>/<code>last_line</code>.</li>
+</ul>
+
+<figure>
+<svg viewBox="0 0 820 170" role="img" aria-labelledby="h1t h1d">
+  <title id="h1t">The line chain hangs off the native TextBlock</title>
+  <desc id="h1d">TextBlock stores firstLine and lastLine; lines link through nextLine/previousLine; firstInvalidLine points at the first non-valid line.</desc>
+  <defs><marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="var(--accent)"/></marker></defs>
+  <rect class="s-surf" x="20" y="58" width="150" height="54" rx="6"/>
+  <text class="s-h" x="95" y="80" text-anchor="middle">TextBlockObject</text>
+  <text class="s-s s-mono" x="95" y="98" text-anchor="middle">first_line · last_line</text>
+
+  <g>
+    <rect class="s-good" x="220" y="58" width="120" height="54" rx="6"/>
+    <text class="s-t" x="280" y="80" text-anchor="middle">line 0</text>
+    <text class="s-s" x="280" y="98" text-anchor="middle">valid</text>
+    <rect class="s-good" x="380" y="58" width="120" height="54" rx="6"/>
+    <text class="s-t" x="440" y="80" text-anchor="middle">line 1</text>
+    <text class="s-s" x="440" y="98" text-anchor="middle">valid</text>
+    <rect class="s-warn" x="540" y="58" width="120" height="54" rx="6"/>
+    <text class="s-t" x="600" y="80" text-anchor="middle">line 2</text>
+    <text class="s-warn-f" x="600" y="98" text-anchor="middle">invalid</text>
+    <rect class="s-box s-dash" x="700" y="58" width="100" height="54" rx="6"/>
+    <text class="s-s" x="750" y="88" text-anchor="middle">…</text>
+  </g>
+  <path class="s-arrow" d="M170 78 L218 78" marker-end="url(#ah)"/>
+  <text class="s-s" x="192" y="72" text-anchor="middle">first</text>
+  <path class="s-arrow" d="M340 92 L378 92" marker-end="url(#ah)"/>
+  <path class="s-arrow" d="M500 92 L538 92" marker-end="url(#ah)"/>
+  <path class="s-arrow" d="M660 92 L698 92" marker-end="url(#ah)"/>
+  <text class="s-s" x="420" y="128" text-anchor="middle">nextLine / previousLine</text>
+  <path class="s-arrow s-dash" d="M95 112 C 95 145, 600 145, 600 114" marker-end="url(#ah)" stroke="var(--warn)"/>
+  <text class="s-warn-f" x="300" y="160">firstInvalidLine → first non-valid line (re-layout resumes here)</text>
+</svg>
+<figcaption>The chain is the unit of invalidation and recycling; <code>firstInvalidLine</code> is where a re-composition picks up after an edit.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="validity"><span class="n">5</span>The validity state machine</h2>
+<p>
+  Every <code>TextLine</code> has a <code>validity</code>: <code>VALID</code>, <code>POSSIBLY_INVALID</code>,
+  <code>INVALID</code>, or <code>STATIC</code>. Ruffle enforces the same <strong>restricted transitions</strong> as
+  Flash Player — an illegal one raises <code>ArgumentError&nbsp;#2008</code> (pinned down by the
+  <code>textline_validity</code> regression test, which this branch takes off the known-failure list). Two flows
+  drive the machine:
+</p>
+<ul>
+  <li><strong>Content change.</strong> Assigning <code>TextBlock.content</code> or <code>bidiLevel</code> walks the
+    chain and flips <code>VALID</code>/<code>POSSIBLY_INVALID</code> lines to <code>INVALID</code>
+    (<code>invalidate_all_lines</code>) — the standard "these lines must be re-composed" trigger.</li>
+  <li><strong>Release.</strong> <code>STATIC</code> is the state the Text Layout Framework's factory
+    (<code>StringTextLineFactory</code>, behind Spark <code>RichText</code>/<code>TextArea</code>) puts a line in
+    before releasing it. <code>releaseLines</code> detaches the range, relinks the chain, updates the native
+    endpoints, and invalidates the lines that <em>followed</em> the range — but <strong>never a <code>STATIC</code>
+    line</strong>.</li>
+</ul>
+
+<figure>
+<svg viewBox="0 0 820 210" role="img" aria-labelledby="v1t v1d">
+  <title id="v1t">TextLine.validity transitions</title>
+  <desc id="v1d">VALID can go to INVALID or STATIC; content/bidi changes invalidate; STATIC to INVALID is rejected with error 2008.</desc>
+  <defs><marker id="av" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="var(--accent)"/></marker>
+    <marker id="avx" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="var(--warn)"/></marker></defs>
+
+  <circle cx="120" cy="90" r="42" class="s-good"/>
+  <text class="s-t" x="120" y="94" text-anchor="middle">VALID</text>
+
+  <circle cx="400" cy="90" r="42" class="s-warn"/>
+  <text class="s-t" x="400" y="94" text-anchor="middle">INVALID</text>
+
+  <circle cx="680" cy="90" r="42" class="s-surf"/>
+  <text class="s-t" x="680" y="94" text-anchor="middle">STATIC</text>
+
+  <path class="s-arrow" d="M162 84 L358 84" marker-end="url(#av)"/>
+  <text class="s-s" x="260" y="76" text-anchor="middle">content= / bidiLevel= → INVALID</text>
+
+  <path class="s-arrow" d="M162 108 C 280 150, 520 150, 638 108" marker-end="url(#av)"/>
+  <text class="s-s" x="400" y="158" text-anchor="middle">factory marks lines STATIC before release</text>
+
+  <path d="M638 72 C 520 30, 280 30, 162 72" fill="none" stroke="var(--warn)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#avx)"/>
+  <text class="s-warn-f" x="400" y="30" text-anchor="middle">STATIC → INVALID  ✗  raises #2008</text>
+</svg>
+<figcaption>The restricted graph matches Flash Player; the dashed edge is the one that must be refused — and the one <code>releaseLines</code> is careful never to attempt.</figcaption>
+</figure>
+
+<div class="note warn">
+  <span class="lbl">The STATIC trap</span>
+  With a default <code>SpaceJustifier</code> (which the <code>TextBlock</code> constructor now installs), the Text
+  Layout Framework takes its justified path: it marks each factory line <code>STATIC</code>, then calls
+  <code>releaseLines</code>. A naive <code>releaseLines</code> that invalidates the line hits
+  <code>STATIC&nbsp;→&nbsp;INVALID</code> → <code>#2008</code> uncaught in <code>enterFrame</code> → the
+  <code>LayoutManager</code> freezes and <em>every</em> Spark component stops laying out. Skipping invalidation for
+  <code>STATIC</code> lines is what lets Spark text render at all.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="hittest"><span class="n">6</span>Hit-testing — caret &amp; selection</h2>
+<p>
+  For editable TLF text (<code>TextInput</code>/<code>TextArea</code>), the SDK's <code>SelectionManager</code>
+  places and moves the caret by calling <code>TextLine.getAtomIndexAtPoint</code>, <code>getAtomBounds</code>,
+  <code>getAtomIndexAtCharIndex</code> and <code>getAtomWordBoundaryOnLeft</code>. All are native, and all the care
+  is in the <strong>coordinate spaces</strong> — kept exactly inverse to <code>fallback_offset</code> (§3) so that
+  where the caret is <em>placed</em> and where it is <em>drawn</em> agree:
+</p>
+<ul>
+  <li><code>getAtomIndexAtPoint</code> receives the point in <strong>stage (global)</strong> coordinates → maps to
+    line-local via <code>global_to_local</code> (origin on the baseline) → into the fallback's gutter-less layout
+    space by adding <code>(gutter, gutter + ascent)</code> → asks the fallback <code>char_index_at_point</code>.</li>
+  <li><code>getAtomBounds</code> is the reverse: the fallback's <code>char_bounds</code> (layout space) translated
+    up by the ascent into line-local space.</li>
+  <li><code>getAtomIndexAtCharIndex</code> maps an <strong>absolute</strong> <code>TextBlock</code> char index to a
+    line-relative atom by subtracting <code>textBlockBeginIndex</code>.</li>
+</ul>
+
+<figure>
+<svg viewBox="0 0 820 180" role="img" aria-labelledby="t1t t1d">
+  <title id="t1t">Coordinate spaces for a hit-test</title>
+  <desc id="t1d">A click travels from stage coordinates to line-local baseline coordinates to the fallback gutter-less layout space.</desc>
+  <defs><marker id="at" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="var(--accent)"/></marker></defs>
+  <rect class="s-box" x="20" y="55" width="200" height="60" rx="6"/>
+  <text class="s-h" x="120" y="80" text-anchor="middle">stage (global)</text>
+  <text class="s-s" x="120" y="98" text-anchor="middle">click point from FP</text>
+
+  <path class="s-arrow" d="M220 85 L270 85" marker-end="url(#at)"/>
+  <text class="s-s" x="245" y="78" text-anchor="middle">global_to_local</text>
+
+  <rect class="s-hi" x="270" y="55" width="220" height="60" rx="6"/>
+  <text class="s-h" x="380" y="80" text-anchor="middle">line-local</text>
+  <text class="s-s" x="380" y="98" text-anchor="middle">origin = baseline start</text>
+
+  <path class="s-arrow" d="M490 85 L540 85" marker-end="url(#at)"/>
+  <text class="s-s s-mono" x="515" y="78" text-anchor="middle" font-size="10">+(g, g+asc)</text>
+
+  <rect class="s-surf" x="540" y="55" width="260" height="60" rx="6"/>
+  <text class="s-h" x="670" y="80" text-anchor="middle">fallback layout space</text>
+  <text class="s-s" x="670" y="98" text-anchor="middle">gutter-less → char_index_at_point</text>
+
+  <path class="s-arrow s-dash" d="M670 118 C 670 150, 380 150, 380 118" marker-end="url(#at)"/>
+  <text class="s-s" x="525" y="146" text-anchor="middle">getAtomBounds runs this in reverse (translate up by ascent)</text>
+</svg>
+<figcaption>Placement (<code>getAtomIndexAtPoint</code>) and drawing (<code>getAtomBounds</code>) share the offset, so the caret lands where it is shown.</figcaption>
+</figure>
+
+<div class="note">
+  <span class="lbl">Two edge cases that froze real apps</span>
+  <strong>(a)</strong> The trailing paragraph terminator is counted in <code>rawTextLength</code> but has no glyph;
+  <code>getAtomBounds</code> for it returns a <em>zero-width box at</em> <code>textWidth</code>, matching FP —
+  otherwise the caret jumped to a garbage coordinate far to the right. <strong>(b)</strong>
+  <code>getAtomIndexAtCharIndex</code> must subtract <code>textBlockBeginIndex</code>; when it didn't, Spark
+  <code>Label</code>'s ellipsis truncation fed a stray <code>-1</code> into <code>#2006</code> and froze the whole
+  <code>LayoutManager</code> in <code>enterFrame</code>.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="justify"><span class="n">7</span>Justification</h2>
+<p>
+  A paragraph is justified when its block carries a <code>SpaceJustifier</code> whose <code>lineJustification</code>
+  is <code>"all"</code> (justify every line) or <code>"allButLast"</code>/<code>"allButMandatoryBreak"</code>
+  (justify all but the final line of the paragraph). <code>break_text_line</code> reads that flag and, for a line
+  that should stretch, switches the backing field to <strong>Justify alignment</strong> and forces it to spread to
+  the requested width even though the fallback holds only that one — otherwise "final" — line, via an
+  <code>ALWAYS_JUSTIFY</code> override. Basic width-justification is therefore correct; the finer spacing envelope
+  (<code>SpaceJustifier.minimum/optimum/maximumSpacing</code>, <code>letterSpacing</code>) is stored but not yet
+  consumed, so the spread is whatever the core Justify pass yields (§9).
+</p>
+
+<!-- ============================================================ -->
+<h2 id="coverage"><span class="n">8</span>API coverage</h2>
+<p>
+  A member-by-member audit of the whole <code>flash.text.engine</code> package against the Adobe AS3 surface counts
+  <strong>228 public members</strong>: <strong class="st-real">165 real</strong>,
+  <strong class="st-partial">31 partial</strong>, <strong class="st-stub">18 stub</strong>,
+  <strong class="st-missing">14 missing</strong>. That "real" figure is optimistic — roughly a dozen
+  <code>ElementFormat</code> properties are stored and validated but never applied to the glyph, so their real-world
+  effect is nil; counting those as partial, functional coverage is closer to two-thirds. All 32 Adobe classes exist
+  as files, the 18 constant/enum classes are complete, and the core composition path (TextBlock line-breaking,
+  TextLine metrics + hit-testing, ElementFormat's font/size/color/weight/kerning, FontDescription, TextElement,
+  GroupElement) is genuinely implemented; the gaps concentrate in <em>advanced typography and specialized layout</em>.
+</p>
+<div class="note">
+  <span class="lbl">Coverage ≠ this branch's contribution</span>
+  Most of that "real" count predates this branch: the 66 enum constants and the native property storage of
+  <code>ElementFormat</code> / <code>FontDescription</code> / the data-holder classes were already in upstream. This
+  branch's own contribution is the composition path — the members in the §1 table that went from stub to real, plus
+  the line-breaking engine behind them. The totals here describe the package's <em>current</em> state, not the
+  delta; the value added is the ~1,000 lines that make <code>TextBlock</code> and <code>TextLine</code> compose.
+</div>
+
+<figure>
+<svg viewBox="0 0 820 90" role="img" aria-labelledby="cov cov2">
+  <title id="cov">Coverage of 228 members</title>
+  <desc id="cov2">165 real, 31 partial, 18 stub, 14 missing.</desc>
+  <rect class="s-good" x="20" y="24" width="550" height="34"/>
+  <rect class="s-info" x="570" y="24" width="103" height="34"/>
+  <rect class="s-warn" x="673" y="24" width="60" height="34"/>
+  <rect class="s-surf" x="733" y="24" width="47" height="34"/>
+  <text class="s-t" x="295" y="46" text-anchor="middle" font-size="13">165 real</text>
+  <text class="s-t" x="621" y="45" text-anchor="middle" font-size="11">31 partial</text>
+  <text class="s-s" x="703" y="45" text-anchor="middle">18 stub</text>
+  <text class="s-s" x="756" y="45" text-anchor="middle">14 miss</text>
+  <text class="s-s" x="20" y="78">real = implemented &amp; functional · partial = stored/validated but not applied · stub = placeholder · missing = absent</text>
+</svg>
+<figcaption>Per-class breakdown below; the 18 enum classes (all "real") are collapsed into one row.</figcaption>
+</figure>
+
+<table>
+  <thead><tr><th>Class</th><th>Backing</th><th class="num">real</th><th class="num">partial</th><th class="num">stub</th><th class="num">miss</th><th>Verdict</th></tr></thead>
+  <tbody>
+    <tr><td><code>TextBlock</code></td><td>mixed</td><td class="num">9</td><td class="num">13</td><td class="num">1</td><td class="num">2</td><td>content · line chain · createTextLine · justify real; most format-ish props stored-only; tabs/lineOffset ignored</td></tr>
+    <tr><td><code>TextLine</code></td><td>mixed</td><td class="num">26</td><td class="num">6</td><td class="num">5</td><td class="num">2</td><td>metrics · atom bounds/point/word-boundary · validity real; graphic/tab/bidi/rotation/mirror stubbed</td></tr>
+    <tr><td><code>ContentElement</code></td><td>native</td><td class="num">5</td><td class="num">3</td><td class="num">3</td><td class="num">0</td><td>base present; <code>textBlock</code>/<code>textBlockBeginIndex</code>/<code>groupElement</code> placeholders</td></tr>
+    <tr><td><code>TextElement</code></td><td>native</td><td class="num">3</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td>complete</td></tr>
+    <tr><td><code>GraphicElement</code></td><td>mixed</td><td class="num">0</td><td class="num">1</td><td class="num">4</td><td class="num">0</td><td>entirely stubbed — inline graphics non-functional</td></tr>
+    <tr><td><code>GroupElement</code></td><td>mixed</td><td class="num">7</td><td class="num">1</td><td class="num">1</td><td class="num">2</td><td>most methods real; <code>getElementAtCharIndex</code>/<code>mergeTextElements</code> missing</td></tr>
+    <tr><td><code>ElementFormat</code></td><td>mixed</td><td class="num">19</td><td class="num">1</td><td class="num">1</td><td class="num">0</td><td>all props stored/validated; only ~6 reach layout, <code>getFontMetrics</code> stub</td></tr>
+    <tr><td><code>FontDescription</code></td><td>mixed</td><td class="num">8</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td>7 real props + clone; <code>isFontCompatible</code> stub, <code>isDeviceFontCompatible</code> missing</td></tr>
+    <tr><td><code>FontMetrics</code></td><td>as</td><td class="num">11</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td>complete data holder</td></tr>
+    <tr><td><code>TextJustifier</code></td><td>as</td><td class="num">2</td><td class="num">0</td><td class="num">2</td><td class="num">1</td><td><code>lineJustification</code> real; <code>clone</code>/<code>locale</code> stub, <code>getJustifierForLocale</code> missing</td></tr>
+    <tr><td><code>SpaceJustifier</code></td><td>as</td><td class="num">3</td><td class="num">3</td><td class="num">0</td><td class="num">0</td><td>props stored; spacing envelope not consumed</td></tr>
+    <tr><td><code>EastAsianJustifier</code></td><td>as</td><td class="num">2</td><td class="num">2</td><td class="num">0</td><td class="num">0</td><td>props stored; East-Asian justification inert</td></tr>
+    <tr><td><code>TabStop</code></td><td>as</td><td class="num">4</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td>complete holder; feature (§9) unimplemented</td></tr>
+    <tr><td><code>TextLineMirrorRegion</code></td><td>none</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">6</td><td>empty shell — event mirror regions non-functional</td></tr>
+    <tr><td>18 enum / constant classes</td><td>none</td><td class="num">66</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td>all Adobe constants present</td></tr>
+    <tr class="sum"><td>Total</td><td></td><td class="num">165</td><td class="num">31</td><td class="num">18</td><td class="num">14</td><td>228 members</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="gaps"><span class="n">9</span>Uncovered capabilities</h2>
+<p>
+  The gaps read more clearly grouped as <em>capabilities</em> than as scattered members. A left-to-right business
+  application rarely reaches any of these; rich, multilingual or vertical layouts do.
+</p>
+<table>
+  <thead><tr><th>Capability</th><th>State</th><th>What is missing</th></tr></thead>
+  <tbody>
+    <tr><td>Inline graphic elements</td><td class="st-stub">stub</td><td><code>GraphicElement</code> fully stubbed (its constructor doesn't even call <code>super</code>); <code>TextLine.hasGraphicElement</code>=false, <code>getAtomGraphic</code>=null, <code>totalAscent/Descent</code> collapse to ascent/descent</td></tr>
+    <tr><td>Event mirror regions</td><td class="st-missing">missing</td><td><code>TextLineMirrorRegion</code> is an empty shell (6 props); <code>ContentElement.eventMirror</code> only stores the dispatcher; <code>TextLine.mirrorRegions</code> absent — interactive/hit-region text does not work</td></tr>
+    <tr><td>Tab stops</td><td class="st-stub">stub</td><td>data holders complete but tabs are never laid out; <code>hasTabs</code> hardcoded false; <code>createTextLine</code> <code>lineOffset</code> ignored; decimal alignment unhonored</td></tr>
+    <tr><td>Bidi / RTL text</td><td class="st-missing">inert</td><td><code>bidiLevel</code> stored + invalidates, but no reordering pass; <code>getAtomBidiLevel</code>=0; visual order always equals logical order</td></tr>
+    <tr><td>Vertical / rotated text</td><td class="st-missing">inert</td><td><code>lineRotation</code> and <code>textRotation</code> stored/validated but no rotated or vertical layout; <code>getAtomTextRotation</code>=ROTATE_0</td></tr>
+    <tr><td>Advanced ElementFormat typography</td><td class="st-partial">inert</td><td><code>alpha</code>, <code>baselineShift</code>, <code>typographicCase</code>, <code>digitCase/Width</code>, <code>ligatureLevel</code>, <code>dominant/alignmentBaseline</code>, per-run <code>textRotation</code>, <code>locale</code> stored but never applied; only font/size/color/bold/italic/kerning/tracking reach the layout</td></tr>
+    <tr><td>Font metrics &amp; compatibility</td><td class="st-stub">stub</td><td><code>ElementFormat.getFontMetrics</code> fabricates values from <code>fontSize</code>; <code>FontDescription.isFontCompatible</code> always false; <code>isDeviceFontCompatible</code> missing</td></tr>
+    <tr><td>Justification tuning</td><td class="st-partial">coarse</td><td>width-justify works, but <code>SpaceJustifier</code> spacing params + <code>EastAsianJustifier</code> styles are inert; <code>TextJustifier.getJustifierForLocale</code> missing</td></tr>
+    <tr><td>Atom model</td><td class="st-partial">approx</td><td>1 char = 1 atom throughout — combining marks, surrogate pairs and graphic atoms are miscounted; word boundaries use a fixed whitespace set, not Unicode segmentation</td></tr>
+    <tr><td>Non-linear scaling &amp; breakOpportunity</td><td class="st-partial">inert</td><td><code>applyNonLinearFontScaling</code> ignored; line breaking uses a fixed break-char set, not <code>ElementFormat.breakOpportunity</code></td></tr>
+    <tr><td>Line recycling &amp; queries</td><td class="st-partial">partial</td><td><code>recreateTextLine</code> reuses geometry but doesn't reset the recycled display object; <code>releaseLineCreationData</code> and <code>getTextLineAtCharIndex</code> absent</td></tr>
+  </tbody>
+</table>
+<div class="note">
+  <span class="lbl">Scope</span>
+  The work is deliberately scoped to the composition path that Spark/TLF drives in a Flex application; the branch is
+  otherwise self-contained.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="appendix"><span class="n">A</span>Appendix — files &amp; types</h2>
+<table>
+  <thead><tr><th>File</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr><td><code>…/flash/text/engine/text_block.rs</code></td><td>The heart: <code>break_text_line</code> (the shared <code>createTextLine</code>/<code>recreateTextLine</code> body), <code>collect_spans</code>, the native <code>TextBlockObject</code> accessors, <code>invalidate_all_lines</code>, native <code>release_lines</code>, <code>get_first_invalid_line</code>/<code>get_last_line</code>. ~850 lines.</td></tr>
+    <tr><td><code>…/flash/text/engine/TextBlock.as</code></td><td>Native property/method declarations plus the pure-AS pieces: <code>findNext/PreviousAtom/WordBoundary</code>, <code>contentText</code>, constructor ordering.</td></tr>
+    <tr><td><code>…/flash/text/engine/text_line.rs</code></td><td>Native <code>TextLine</code> globals: metrics getters, <code>getAtomIndexAtPoint</code>/<code>getAtomBounds</code>/<code>getAtomIndexAtCharIndex</code>/<code>getAtomWordBoundaryOnLeft</code>, the <code>validity</code> setter + transition rules.</td></tr>
+    <tr><td><code>…/flash/text/engine/TextLine.as</code></td><td>The <code>TextLine</code> surface + chain slots (<code>_nextLine</code>/<code>_previousLine</code>/<code>_textBlockBeginIndex</code>/<code>_rawTextLength</code>).</td></tr>
+    <tr><td><code>core/src/display_object/text_line.rs</code></td><td>The <code>TextLine</code> display object: <code>LineMetrics</code>, the <code>fallback_offset</code> baseline transform, <code>render_self</code>/<code>self_bounds</code>, validity storage.</td></tr>
+    <tr><td><code>core/src/avm2/object/text_block_object.rs</code></td><td>Upstream's native <code>TextBlockObject</code>, extended here with the <code>last_line</code> field.</td></tr>
+    <tr><td><code>core/src/html/layout.rs</code></td><td>The reused layout engine; extended with the <code>justify_final_line</code> parameter threaded through <code>lower_from_text_spans</code>.</td></tr>
+    <tr><td><code>core/src/display_object/edit_text.rs</code></td><td>The backing field; <code>EditText::GUTTER</code> made accessible and the <code>ALWAYS_JUSTIFY</code> single-line spread.</td></tr>
+    <tr><td><code>tests/…/avm2/textline_validity/</code></td><td>The validity state-machine regression test — taken off the known-failure list by this branch.</td></tr>
+  </tbody>
+</table>
+
+<h3>Key types</h3>
+<ul>
+  <li><code>TextBlockObject</code> — native <code>TextBlock</code> storage: content, justifier, tab stops, the
+    baseline/rotation/bidi properties, and the <code>first_line</code>/<code>last_line</code> chain endpoints.</li>
+  <li><code>TextLine</code> (display object) — an interactive display object wrapping an <code>EditText</code>
+    fallback; carries <code>LineMetrics</code> and <code>validity</code>; positioned by <code>fallback_offset</code>.</li>
+  <li><code>LineMetrics { ascent, descent, text_width }</code> — the measured line, in the line's own
+    baseline-origin space.</li>
+  <li><code>TextLineValidity</code> (in <code>fte.rs</code>) — the four-state enum + the transition-legality rules
+    that back <code>#2008</code>.</li>
+</ul>
+
+</div>
+</body>
+</html>

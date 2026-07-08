@@ -98,7 +98,7 @@
   <dl>
     <dt>Project</dt><dd>Ruffle — Flash Player emulator (Rust + WebAssembly + TypeScript)</dd>
     <dt>Branch</dt><dd><code>pluggable-font-renderer</code></dd>
-    <dt>Status</dt><dd>Working draft — last revised for the per-size font metrics rework (§1.3.5)</dd>
+    <dt>Status</dt><dd>Working draft — last revised for the typographic-metrics addition (§1.3.6)</dd>
     <dt>Audience</dt><dd>Maintainers, integrators, third-party renderer authors</dd>
     <dt>Scope</dt><dd>Web platform — any JavaScript host able to load a bridge module (browsers, Electron, and similar embedders)</dd>
   </dl>
@@ -157,7 +157,7 @@
   <tbody>
     <tr><td><strong>Twips</strong></td><td>Internal Flash unit. 1 px = 20 twips. Most metrics are stored as twips to keep the rasterizer free of floating-point drift.</td></tr>
     <tr><td><strong>FontQuery</strong></td><td><code>{name, is_bold, is_italic}</code> tuple the layout uses to look up a font.</td></tr>
-    <tr><td><strong>FontMetrics</strong></td><td><code>{scale, ascent, descent, leading}</code> in twips. <code>scale</code> is the em-size at which the bitmap was rasterized. Size-aware backends report them per raster size (§1.3.5).</td></tr>
+    <tr><td><strong>FontMetrics</strong></td><td><code>{scale, ascent, descent, leading}</code> in twips. <code>scale</code> is the em-size at which the bitmap was rasterized. Size-aware backends report them per raster size (§1.3.5); a backend may also expose the OS/2 typographic ascent/descent for the Flash Text Engine (§1.3.6).</td></tr>
     <tr><td><strong>Glyph</strong></td><td>Per-codepoint result. Holds either a vector outline or a rasterized bitmap, plus an advance and an optional <code>intrinsic_scale</code>.</td></tr>
     <tr><td><strong>FontType</strong></td><td><code>Embedded</code> when the SWF brought its own outlines, <code>Device</code> when Ruffle had to ask the host.</td></tr>
     <tr><td><strong>DefaultFont</strong></td><td>Symbolic mapping for Flash's <code>_sans</code>, <code>_serif</code>, <code>_typewriter</code>, and the Japanese defaults.</td></tr>
@@ -439,6 +439,50 @@ fn metrics_at(&amp;self, _height: Twips) -&gt; FontMetrics { self.metrics() }</c
   <code>get_font_metrics_at_size</code> returns <code>None</code>.
 </p>
 
+<h4>1.3.6 Typographic metrics for the Flash Text Engine</h4>
+<p>
+  The per-size rework above answers "how tall is a line at this size"; this refinement answers "<em>which</em> of
+  the font's two vertical metrics to report", because Flash Player picks differently depending on the text engine.
+  A classic <code>TextField</code> — the geometry an <code>mx</code> component computes itself from — uses the
+  device rasterizer's <em>cell</em> metrics (on Windows, GDI's <code>tmAscent</code>/<code>tmDescent</code>), which
+  fold in the font's internal leading and run a few pixels taller than the glyphs. The Flash Text Engine
+  (<code>flash.text.engine</code>, the foundation under Spark's <code>TextLine</code> and <code>Label</code>)
+  instead sizes text with the font's <em>typographic</em> metrics — the OS/2 <code>sTypoAscender</code> /
+  <code>sTypoDescender</code>, a tighter box. Reporting a single pair matches one engine and missizes the other:
+  with the cell pair an FTE text box measures a few pixels too tall, and forcing the typographic pair globally
+  instead shifts every classic <code>mx</code> field off its baseline.
+</p>
+<p>
+  So a backend may report <em>both</em>. <code>getFontMetrics</code> keeps returning the cell
+  <code>ascent</code>/<code>descent</code> for classic fields and optionally adds <code>typoAscent</code> /
+  <code>typoDescent</code>; the core exposes them through a parallel, opt-in hook and consumes them only in the
+  FTE path.
+</p>
+<pre><code>// New trait hook, alongside get_font_metrics_at_size; default = None.
+fn get_typo_font_metrics(&amp;self, _height_px: u32)
+    -&gt; Option&lt;FontMetrics&gt; { None }
+
+// FontLike::typo_metrics_at — default None; the ExternalRenderer forwards
+// to the bridge, and callers fall back to the cell metrics when it is None.
+fn typo_metrics_at(&amp;self, _height: Twips) -&gt; Option&lt;FontMetrics&gt; { None }</code></pre>
+<p>
+  The consumer side lives entirely inside <code>flash.text.engine</code>.
+  <code>LayoutLine::typo_ascent_descent</code> takes the max typographic ascent/descent over the line's text
+  boxes (<code>None</code> when no font supplies them), and <code>TextBlock::break_text_line</code> reports those
+  as the <code>TextLine</code>'s <code>ascent</code>/<code>descent</code> — the values Spark reads to size a
+  control — while the glyphs themselves stay laid out against the cell metrics. A
+  <code>LineMetrics.fallback_ascent</code>/<code>_descent</code> pair keeps the two apart: the line's fallback
+  offset and atom-coordinate transforms use the cell ascent, so the ink lands exactly where it does for a classic
+  field, and only the box height and baseline handed to Spark use the typographic pair. Classic
+  <code>EditText</code> is untouched — it never calls the typographic hook.
+</p>
+<p>
+  Net effect: on one device font, an <code>mx</code> <code>TextInput</code> and a Spark <code>TextInput</code> now
+  each match Flash Player, sized from the metric convention their own engine uses. Backends that expose no
+  typographic metrics are unaffected — the FTE path sees <code>None</code> and falls back to the cell
+  ascent/descent, i.e. the pre-existing behavior.
+</p>
+
 <h3 id="builtin">1.4 Existing built-in renderers</h3>
 <table>
   <thead><tr><th>Variant</th><th>Where the bitmap comes from</th><th>Notes</th></tr></thead>
@@ -473,6 +517,8 @@ fn metrics_at(&amp;self, _height: Twips) -&gt; FontMetrics { self.metrics() }</c
     }
     fn get_font_metrics_at_size(&amp;self, _height_px: u32)
         -&gt; Option&lt;FontMetrics&gt; { None }
+    fn get_typo_font_metrics(&amp;self, _height_px: u32)
+        -&gt; Option&lt;FontMetrics&gt; { None }
     fn is_size_aware(&amp;self) -&gt; bool { false }
 }</code></pre>
 <p>
@@ -482,7 +528,9 @@ fn metrics_at(&amp;self, _height: Twips) -&gt; FontMetrics { self.metrics() }</c
   divisor cancels, and <code>scale</code> collapses to 1.0 (no bilinear blur). Symmetrically,
   <code>FontLike::metrics_at(height)</code> resolves font-wide metrics per size for size-aware backends — the
   layout loop, the baseline computation in <code>evaluate()</code> and the <code>EditText</code> measurement
-  paths all pass the height they already carry (§1.3.5).
+  paths all pass the height they already carry (§1.3.5). A parallel <code>FontLike::typo_metrics_at(height)</code>
+  exposes the font's typographic metrics for the Flash Text Engine, again defaulting to <code>None</code> so
+  classic fields and size-unaware backends are unaffected (§1.3.6).
 </p>
 
 <h3>2.2 <code>web/src/lib.rs</code> — new DeviceFontRenderer variant</h3>
@@ -749,7 +797,10 @@ deviceFontRenderer?: DeviceFontRenderer;</code></pre>
     calculateKerning(left: number, right: number, sizePx: number): number;
     destroy(): void;
 }
-interface FontMetrics { ascent: number; descent: number; leading: number; }
+interface FontMetrics {
+    ascent: number; descent: number; leading: number;
+    typoAscent?: number; typoDescent?: number; // optional, see §1.3.6
+}
 interface GlyphRaster {
     width: number;       // bitmap width, &gt;= 1
     height: number;      // bitmap height, &gt;= 1
@@ -766,6 +817,12 @@ interface GlyphRaster {
     Pixel-locked backends must report whole pixels, consistent with their bitmaps — fractional metrics propagate
     into fractional layout positions in content that sizes itself around text, pushing vector graphics off the
     pixel grid.</li>
+  <li><strong>Typographic metrics are optional.</strong> A backend may add <code>typoAscent</code> /
+    <code>typoDescent</code> (OS/2 <code>sTypoAscender</code> / <code>-sTypoDescender</code>, whole pixels at
+    <code>sizePx</code>) beside the cell <code>ascent</code>/<code>descent</code>. The Flash Text Engine (Spark
+    text) sizes its boxes from these, matching Flash Player, while classic <code>TextField</code>s
+    (<code>mx</code> components) keep the cell pair; omit both to have FTE fall back to the cell metrics (§1.3.6).
+    Report whole pixels here too, for the same reason as the cell metrics.</li>
   <li>Bitmaps are RGBA, top-down, row-major, premultiplied alpha. Non-ink pixels are <code>(0, 0, 0, 0)</code>.
     The buffer length must equal <code>width * height * 4</code>.</li>
   <li>Bitmap layout uses the canvas convention: <code>height = ascent + descent</code>, baseline at row
@@ -829,9 +886,11 @@ struct SizedFont {
     hdc: HDC,          // dedicated memory DC (CreateCompatibleDC)
     hfont: HFONT,
     prev_obj: HGDIOBJ, // restored on drop
-    ascent: i32,       // TEXTMETRIC, whole pixels
-    descent: i32,
+    ascent: i32,       // TEXTMETRIC cell ascent, whole pixels
+    descent: i32,      // TEXTMETRIC cell descent
     leading: i32,      // tmExternalLeading
+    typo_ascent: i32,  // OS/2 sTypoAscender, scaled to size (§1.3.6)
+    typo_descent: i32, // OS/2 -sTypoDescender, scaled to size
     kerning: HashMap&lt;u64, i32&gt;, // scraped once via GetKerningPairsW
 }</code></pre>
 
@@ -844,7 +903,10 @@ struct SizedFont {
   <li><strong>Metrics:</strong> from <code>GetTextMetricsW</code>, whole pixels at the requested size.
     <code>tmAscent + tmDescent</code> becomes the bitmap height; <code>tmExternalLeading</code> becomes
     <code>FontMetrics.leading</code>. The same integers feed Ruffle's per-size layout metrics (§1.3.5), so
-    everything Flash content measures is a whole pixel.</li>
+    everything a classic field measures is a whole pixel. The OS/2 typographic ascent/descent
+    (<code>sTypoAscender</code>/<code>sTypoDescender</code>) are read separately with <code>GetFontData</code> —
+    <code>GetOutlineTextMetricsW</code> does not expose them — scaled to the size and reported as
+    <code>typoAscent</code>/<code>typoDescent</code> for the Flash Text Engine (§1.3.6).</li>
   <li><strong>Glyph bitmap:</strong> <code>GetGlyphOutlineW</code> is called twice — a <code>GGO_METRICS</code>
     probe for the <code>GLYPHMETRICS</code> (black box, cell origin, advance), then <code>GGO_BITMAP</code> for a
     1-bit packed mask (MSB-first, rows padded to 32 bits). Each ink bit becomes an opaque premultiplied-white
@@ -863,7 +925,10 @@ struct SizedFont {
 <p>The implementation always returns <code>true</code>. Returning <code>false</code> would force Ruffle to skip <code>calculateKerning</code> for every pair, but pairs without a dedicated entry already return 0 — indistinguishable from "no kerning info" for that pair. Truthful self-reporting would require eagerly creating an <code>HFONT</code> and reading its kerning table; deferring to the first kerning request is cheaper.</p>
 
 <h3>4.5 Reported interface (auto-generated by napi-rs)</h3>
-<pre><code>export interface GdiFontMetrics { ascent: number; descent: number; leading: number; }
+<pre><code>export interface GdiFontMetrics {
+    ascent: number; descent: number; leading: number;
+    typoAscent: number; typoDescent: number;
+}
 export interface GdiGlyphRaster {
     width: number;
     height: number;
@@ -925,6 +990,7 @@ struct RegisteredFace {
     offset: u32,           // face offset (TTC/OTC support)
     has_kern_table: bool,
     units_per_em: u16,
+    typo_metrics: Option&lt;(i16, i16)&gt;, // OS/2 sTypo asc/desc, font units (§1.3.6)
 }
 thread_local! {
     static REGISTRY: RefCell&lt;HashMap&lt;FaceKey, RegisteredFace&gt;&gt;
@@ -941,6 +1007,9 @@ thread_local! {
     it with the bold/italic flags into a <code>FaceKey</code>.</li>
   <li>Stores a <code>RegisteredFace</code> sharing the underlying <code>Rc&lt;Vec&lt;u8&gt;&gt;</code> with all faces
     from the same blob — one heap allocation for the blob, regardless of face count.</li>
+  <li>Reads the OS/2 typographic ascender/descender (<code>sTypoAscender</code>/<code>sTypoDescender</code>) once
+    and caches them in font units, so <code>getFontMetrics</code> can report <code>typoAscent</code>/
+    <code>typoDescent</code> for the Flash Text Engine without re-parsing (§1.3.6).</li>
   <li>Logs and returns silently on parse failures, matching the embedded path's graceful degradation.</li>
 </ul>
 
@@ -973,7 +1042,9 @@ struct CachedGlyph {
   <code>by_size[size_px]</code> on first call by querying <code>MetricsProxy</code> and scaling by
   <code>size_px / units_per_em</code>; the values are reported to Ruffle rounded to whole pixels — the same
   rounding <code>renderGlyph</code> uses to pad its bitmaps — as the per-size metrics contract expects
-  (§1.3.5, §3.3).
+  (§1.3.5, §3.3). When the face carries an OS/2 table, the same call also reports <code>typoAscent</code>/
+  <code>typoDescent</code> — the cached <code>sTypoAscender</code>/<code>sTypoDescender</code> scaled to the
+  size — so the Flash Text Engine sizes text as Flash Player does (§1.3.6).
 </p>
 
 <h3>5.5 renderGlyph — rasterization with bitmap padding</h3>

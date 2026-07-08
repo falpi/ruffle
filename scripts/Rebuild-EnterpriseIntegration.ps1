@@ -94,17 +94,21 @@ $OriginRemote      = 'origin'
 
 # Merge order
 $MergeOrder = @(
-    'fix-memory-leaks',
-    'fix-bitmapdata-filter-expansion',
-    'fix-blurry-grid-separators',
-    'fix-mouse-events-clipping',
-    'fix-mouse-hover-on-mx-buttons',
-    'fix-mouse-click-release-outside-buttons',
-    'fix-arcgis-flex-sdk-too-much-recursion',
-    'add-urlstream-implementation',
-    'add-export-instruments',
-    'tile-memory-allocator',
-    'pluggable-font-renderer'
+    'fix-memory-leaks',                        # bug vari che causano memory leaks
+    'fix-blurry-grid-separators',              # bug su rendering blurry di linee orizzontali e verticali
+    'fix-mouse-events-clipping',               # bug su eventi mouse non clippati sul container host
+    'fix-mouse-hover-on-mx-buttons',           # bug su eventi hover non corretti
+    'fix-mouse-click-release-outside-buttons', # bug su eventi di rilascio mouse fuori dal container 
+    'fix-bitmapdata-filter-expansion',         # bug su ombreggiatura dei toolTip
+    'fix-collator-compare-normalization',      # bug su sort array che va in loop su s:DataGrid    
+    'fix-arcgis-flex-sdk-too-much-recursion',  # bug su mappe arcgis che vanno in ricorsione    
+    'add-text-input-event-dispatch',           # implementa dispaccio eventi mouse su oggetti non text 
+    'add-mouse-cursor-property',               # implementa impossibilità di ridefinire cursore mouse    
+    'add-urlstream-improvements',              # implementa URLStream con funzionalità estese (fork only)
+    'add-font-text-engine-implementation',     # implementa api FTE
+    'add-export-instruments',                  # ottimizzazioni varie su XML 
+    'tile-memory-allocator',                   # aggiunge nuovo memory allocator ottimizzato
+    'pluggable-font-renderer'                  # aggiunge custom renderer esternalizzazbile su plugin
 )
 
 # --------------------------------------------------------------------------

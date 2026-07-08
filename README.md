@@ -139,7 +139,7 @@ Per-branch design notes, when present, live under [`docs/`](docs/) on the [`ruff
 | Branch | Purpose |
 | --- | --- |
 | [`master`](../../tree/master) | Strict mirror of [upstream `ruffle-rs/ruffle@master`](https://github.com/ruffle-rs/ruffle). Never committed to directly; advanced only via `git fetch upstream && git merge --ff-only`. |
-| [`ruffle-enterprise`](../../tree/ruffle-enterprise) | **Fork identity branch (default landing branch).** Carries only the fork-only meta assets (this README, `scripts/`, any future fork-specific documentation) as a thin linear layer above `master`. Rebased on top of `master` when upstream advances (via a separate helper script). Not intended for building and not a parent of the integration branch — its content is deliberately kept isolated so the build integration stays a pure "master + features" tree. |
+| [`ruffle-enterprise`](../../tree/ruffle-enterprise) | **Fork identity branch (default landing branch).** Carries only the fork-only meta assets (this README, `scripts/`, `docs/`) as a thin linear layer above `master`. Rebased on top of `master` when upstream advances (via a separate helper script). Not intended for building and not a parent of the integration branch — its content is deliberately kept isolated so the build integration stays a pure "master + features" tree. |
 
 The integration branches (`local/release-merge-wasm32` and `local/release-merge-wasm64`) are **not published** here: they are ephemeral local artefacts rebuilt from scratch on every release. Their releases are published as tags (`enterprise-vX.Y.Z-wasm32` / `-wasm64`), which are the correct target for anyone wanting a fixed reference to a validated build.
 
@@ -159,6 +159,8 @@ The integration branches (`local/release-merge-wasm32` and `local/release-merge-
 | --- | --- | --- |
 | [`add-export-instruments`](../../tree/add-export-instruments) | _(fork-only)_ | Native `ExportUtils` built-in providing streaming XLSX / CSV export from AS3, sized for enterprise recordsets. Streaming ZIP with on-the-fly deflate keeps peak memory O(1) per row, so 1 M-row exports do not push the wasm32 4 GiB ceiling. Automatic per-column type detection (numeric / date / string) with correct XLSX cell formatting. Sync (`syncExport`) and async-chunked (`asyncExport*`) variants; a companion `FlexUtils.exportGridToExcel` wrapper drives an `ActiveProgress` popup on Flex `DataGrid` sources. See [`docs/add-export-instruments.html`](docs/add-export-instruments.html). |
 | [`add-urlstream-implementation`](../../tree/add-urlstream-implementation) | [#24078](https://github.com/ruffle-rs/ruffle/pull/24078) (open) | Streaming implementation of `flash.net.URLStream`. Chunks are exposed to AS3 through `IDataInput` as they arrive over the wire instead of being buffered whole, enabling efficient consumption of large SOAP / binary recordset responses from long-lived enterprise sessions. Unifies the underlying transport with `URLLoader`. |
+| [`add-font-text-engine-implementation`](../../tree/add-font-text-engine-implementation) | [#24153](https://github.com/ruffle-rs/ruffle/pull/24153) (open) | Implements the Flash Text Engine (`flash.text.engine`) on top of upstream's native `TextBlock` object: real line breaking driven by the core layout engine, real glyph metrics, `TextLine` chains, and content invalidation. Provides the low-level text substrate the Text Layout Framework (TLF) — and therefore Spark text components — builds on. See [`docs/add-font-text-engine-implementation.html`](docs/add-font-text-engine-implementation.html). |
+| [`add-mouse-cursor-property`](../../tree/add-mouse-cursor-property) | [#24150](https://github.com/ruffle-rs/ruffle/pull/24150) (open) | Implements `flash.ui.Mouse.cursor` (a forced cursor tracked in the mouse state and applied in the player loop), enabling the I-beam and other system cursors over TLF / Spark text components that set the property. |
 
 ### MX/Spark rendering & input fixes
 
@@ -169,12 +171,14 @@ The integration branches (`local/release-merge-wasm32` and `local/release-merge-
 | [`fix-mouse-events-clipping`](../../tree/fix-mouse-events-clipping) | [#23797](https://github.com/ruffle-rs/ruffle/pull/23797) (open) | Mouse hit-testing now respects `scrollRect` when picking AVM1/AVM2 children. Previously, children clipped out of view by `scrollRect` (typical of `VGroup` / `HGroup` with `clipAndEnableScrolling`) remained clickable. Closes upstream issue [#23678](https://github.com/ruffle-rs/ruffle/issues/23678). |
 | [`fix-mouse-click-release-outside-buttons`](../../tree/fix-mouse-click-release-outside-buttons) | [#23803](https://github.com/ruffle-rs/ruffle/pull/23803) (open) | AVM2 no longer fires a spurious `click` when the mouse is released outside a pressed button. The structural equality fallback used by AVM1 (`check_display_object_equality`) was being incorrectly applied to AVM2, where dynamically-created objects all share depth = 0 and id = 0. Closes upstream issue [#23798](https://github.com/ruffle-rs/ruffle/issues/23798). |
 | [`fix-mouse-hover-on-mx-buttons`](../../tree/fix-mouse-hover-on-mx-buttons) | [#23807](https://github.com/ruffle-rs/ruffle/pull/23807) (open) | Drag operations no longer double-dispatch `rollOver` / `rollOut` to the pressed object in AVM2. Fixes `mx.controls.Button` jumping to the `UP` skin state during outside-drag and failing to restore `DOWN` on re-entry. Closes upstream issue [#23801](https://github.com/ruffle-rs/ruffle/issues/23801). |
+| [`add-text-input-event-dispatch`](../../tree/add-text-input-event-dispatch) | [#24151](https://github.com/ruffle-rs/ruffle/pull/24151) (open) | Dispatches `TextEvent.TEXT_INPUT` to focused AVM2 objects that are not native `EditText` — which is what enables keyboard entry in TLF-based Spark `TextInput` / `TextArea`. Previously only native text fields received the event, so Spark inputs silently swallowed typing. See [`docs/add-text-input-event-dispatch.html`](docs/add-text-input-event-dispatch.html). |
 
 ### AVM compatibility fixes
 
 | Branch | Upstream PR | Summary |
 | --- | --- | --- |
 | [`fix-arcgis-flex-sdk-too-much-recursion`](../../tree/fix-arcgis-flex-sdk-too-much-recursion) | [#23355](https://github.com/ruffle-rs/ruffle/pull/23355) (open) | Reentrancy guard on the AVM2 `removed` / `removedFromStage` event dispatch. When an AS3 listener responds to the removal event by calling `removeChild` again on the same subtree, the recursive invocation re-enters the same dispatch and overflows the stack. A `BEING_REMOVED` flag on the display object is set at dispatch entry and cleared at exit, so the recursive call bails out immediately — matching Flash Player behaviour. Closes upstream issue [#22860](https://github.com/ruffle-rs/ruffle/issues/22860) (encountered while running the ArcGIS Flex SDK). |
+| [`fix-collator-compare-normalization`](../../tree/fix-collator-compare-normalization) | [#24148](https://github.com/ruffle-rs/ruffle/pull/24148) (open) | Normalizes `flash.globalization.Collator.compare` to return exactly `-1` / `0` / `1`. Flex's `Sort.findItem` switches on the exact returned value for its binary search, so any other magnitude drove the Spark `DataGrid` sort into an infinite loop. |
 | [`fix-electron-instantiate-streaming`](../../tree/fix-electron-instantiate-streaming) | [#23984](https://github.com/ruffle-rs/ruffle/pull/23984) (closed) | Detects Node-like environments and falls back to `WebAssembly.instantiate` from an `ArrayBuffer` instead of `instantiateStreaming`. Required since `wasm-bindgen` 0.2.120+ dispatches a `Response` object that Electron renderers with `nodeIntegration = true` reject. Relevant for SWFs shipped inside Electron-based desktop wrappers. |
 
 ### Experimental targets and subsystems
@@ -188,7 +192,7 @@ The integration branches (`local/release-merge-wasm32` and `local/release-merge-
 ## Relationship with upstream
 
 * **`master`** is a strict mirror of upstream. It is advanced via `git fetch upstream && git merge --ff-only`; no commit lands directly on it. Tags and releases produced by upstream are not republished here.
-* **`ruffle-enterprise`** carries only fork-only meta assets (this README, `scripts/`, and any future fork-specific documentation) as a thin linear layer above `master`. When `master` advances, it is rebased on the new tip and force-pushed. It contains no functional code changes and does not feed into the integration branch.
+* **`ruffle-enterprise`** carries only fork-only meta assets (this README, `scripts/`, `docs/`) as a thin linear layer above `master`. When `master` advances, it is rebased on the new tip and force-pushed. It contains no functional code changes and does not feed into the integration branch.
 * Each `fix-*`, `add-*` and single-feature branch is rebased on top of `master` and intended to be submittable as a self-contained PR. The upstream PR number, where one exists, is listed in the tables above and is the authoritative description of the patch.
 * The `local/release-merge-wasm32` / `local/release-merge-wasm64` integration branches are **local, ephemeral build artefacts**: rebuilt fresh from `master + feature branches` on every run of the rebuild script, and intentionally never pushed to the remote. The base branch `ruffle-enterprise` is kept out of that chain so the integration stays a pure "master + features" tree. They are not intended to be submitted upstream.
 * **Releases are published as tags**, not as branches. Tags follow the pattern `enterprise-vX.Y.Z-wasm32` / `-wasm64` and point at the validated tip of the corresponding integration branch. They are immutable and are the correct reference for anyone wanting to check out a specific release build.
@@ -197,7 +201,7 @@ The integration branches (`local/release-merge-wasm32` and `local/release-merge-
 
 ## Structure
 
-The directory layout is unchanged from upstream, with one fork-specific addition:
+The directory layout is unchanged from upstream, with two fork-specific additions (both present only on the `ruffle-enterprise` base branch):
 
 - `core` — core emulator and common code
 - `swf` — SWF and ActionScript parser
@@ -209,7 +213,8 @@ The directory layout is unchanged from upstream, with one fork-specific addition
 - `wstr` — a Flash-compatible implementation of strings
 - `scanner` — a utility to bulk parse SWF files
 - `exporter` — a utility to generate PNG screenshots of a SWF file
-- `scripts` — **(fork-specific)** rebuild-integration scripts for producing release builds; lives only on the `ruffle-enterprise` base branch
+- `scripts` — **(fork-specific)** rebuild-integration and branch-rebase automation for producing release builds
+- `docs` — **(fork-specific)** per-branch design references (one self-contained HTML per feature branch), collected here so the feature branches and their upstream PRs stay code-only
 
 
 ## License
