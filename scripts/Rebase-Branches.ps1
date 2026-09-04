@@ -63,21 +63,21 @@
     Default: off (backups are created).
 
 .EXAMPLE
-    powershell.exe -File .\scripts\Rebase-FeatureBranches.ps1 -DryRun
+    powershell.exe -File .\scripts\Rebase-Branches.ps1 -DryRun
     Show the plan without touching anything.
 
 .EXAMPLE
-    powershell.exe -File .\scripts\Rebase-FeatureBranches.ps1
+    powershell.exe -File .\scripts\Rebase-Branches.ps1
     Sync master from upstream, rebase all branches locally, print push commands.
 
 .EXAMPLE
-    powershell.exe -File .\scripts\Rebase-FeatureBranches.ps1 -SkipMasterSync
+    powershell.exe -File .\scripts\Rebase-Branches.ps1 -SkipMasterSync
     Re-cascade after editing a mid-chain branch, without pulling upstream.
 
 .NOTES
-    Companion to scripts/Rebuild-EnterpriseIntegration.ps1. This script keeps
+    Companion to scripts/Merge-Branches.ps1. This script keeps
     the feature branches rebased on master; that one merges them into the
-    local release-integration branches.
+    local merge-integration branches.
 #>
 
 [CmdletBinding()]

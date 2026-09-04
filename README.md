@@ -52,7 +52,7 @@ Use **upstream Ruffle** for everything else: games, animations, generic SWF cont
 
 The fork tracks upstream `master` on a dedicated branch with zero divergence. Fork-only meta assets (this README, the rebuild scripts, and any other content specific to the fork) live on the [`ruffle-enterprise`](../../tree/ruffle-enterprise) branch as an independent thin layer above `master`. Each `fix-*` / `add-*` feature branch is rebased on the latest upstream `master` and is intended to be submittable as an isolated pull request. The current status of each upstream PR is recorded in the branch tables below.
 
-Release builds are produced by rebuilding a **local, ephemeral** integration branch (`local/release-merge-wasm32`, and its wasm64 sibling) that merges `master + feature branches` in a defined order. That branch is a build artefact and is not pushed to the remote — every rebuild rewrites its history from scratch. Publishable release state is captured on annotated tags (`enterprise-vX.Y.Z-wasm32` / `-wasm64`) applied to a validated integration tip and pushed to the remote as immutable references. See [Building a release](#building-a-release) for the operational procedure.
+Release builds are produced by rebuilding a **local, ephemeral** integration branch (`local/merge-wasm32`, and its wasm64 sibling) that merges `master + feature branches` in a defined order. That branch is a build artefact and is not pushed to the remote — every rebuild rewrites its history from scratch. A point-in-time set of inputs can be frozen into an immutable `snapshot-<tag>/*` tag namespace and rebuilt on demand. Publishable release state is captured on annotated release tags applied to a validated integration tip. See [Building a release](#building-a-release) for the operational procedure.
 
 For functional Flash Player emulation status, refer to the [upstream project status](https://github.com/ruffle-rs/ruffle#project-status) — this fork does not alter the supported subset of ActionScript / SWF features.
 
@@ -65,60 +65,83 @@ All general documentation — usage, prerequisites, contributing, project struct
 * [Upstream Wiki](https://github.com/ruffle-rs/ruffle/wiki) for end-user guides
 * [CONTRIBUTING.md](CONTRIBUTING.md) for the upstream contribution guidelines (unchanged here)
 
-To **consume** an already-produced release, check out the release tag rather than a branch:
+To **consume** an already-produced release, check out its release tag rather than a branch:
 
 ```shell
-git checkout enterprise-vX.Y.Z-wasm32     # or enterprise-vX.Y.Z-wasm64
+git checkout <release-tag>-wasm32         # the wasm32 release tag; -wasm64 for the Memory64 build
 cargo run --release --package=ruffle_desktop
 ```
 
-Tags are immutable and reproducibly point at the exact commit that was validated for that release; unlike branches, they are not rewritten by future rebuilds.
+Release tags are immutable and reproducibly point at the exact commit that was validated for that release; unlike branches, they are not rewritten by future rebuilds. (The exact release-tag naming standard is not yet fixed.)
 
 To **produce** a new release build yourself (which is the way to get the latest enterprise patch-set applied to the current upstream tip), see [Building a release](#building-a-release) below.
 
 
 ## Building a release
 
-Release builds are produced by rebuilding the local, ephemeral `local/release-merge-wasm32` and `local/release-merge-wasm64` integration branches. A single run of [`scripts/Rebuild-EnterpriseIntegration.ps1`](scripts/Rebuild-EnterpriseIntegration.ps1) (which lives on the [`ruffle-enterprise`](../../tree/ruffle-enterprise) branch) produces both.
+Release builds are produced by rebuilding the local, ephemeral `local/merge-wasm32` and `local/merge-wasm64` integration branches. A single run of [`scripts/Merge-Branches.ps1`](scripts/Merge-Branches.ps1) (which lives on the [`ruffle-enterprise`](../../tree/ruffle-enterprise) branch) produces both. The same script can also rebuild a frozen historical snapshot — see [Freezing and rebuilding a snapshot](#freezing-and-rebuilding-a-snapshot).
 
 ### Prerequisites
 
-* A local clone of this repository with `origin` pointing at `falpi/ruffle-enterprise`. No `upstream` remote is required for the build procedure itself: the script reads only `origin/*` refs.
+* A local clone of this repository with `origin` pointing at `falpi/ruffle-enterprise`. No `upstream` remote is required for the build procedure itself.
 * Latest stable Rust toolchain (for the standard build) and Rust beta (used by the CI-gate checks). For actually **building** the wasm64 variant, additionally a nightly toolchain with `-Z build-std` support for the Tier-3 `wasm64-unknown-unknown` target. The rebuild script itself does not compile wasm64 — it only produces the integration branch — so nightly is only needed at build time.
-* The tips on `origin` are the source of truth. In particular the script assumes that all feature branches listed in its `$MergeOrder` are rebased on the current `origin/master`. Moving to a newer upstream `master` is therefore a separate operational step (fetching upstream, fast-forwarding origin's `master`, and rebasing every feature branch on the new tip) and is intentionally not part of this build procedure.
+* By default the merge uses your **local** feature branches (so unpushed work can be built and tested); pass `-FromOrigin` to build from the pushed `origin/*` tips instead. Either way the script assumes the feature branches in its `$MergeOrder` are rebased on the current `master`. Moving to a newer upstream `master` is therefore a separate operational step (fetching upstream, fast-forwarding `master`, and rebasing every feature branch on the new tip — see `Rebase-Branches.ps1`) and is intentionally not part of this build procedure.
 
 ### Rebuild procedure
 
-1. Refresh remote-tracking refs and switch to the branch that carries the script:
+1. Switch to the branch that carries the script (fetch too, so divergence warnings and any `-FromOrigin` build compare against current remote tips):
     ```shell
     git fetch origin
     git checkout ruffle-enterprise
     ```
-    The script merges from `origin/<feature-branch>` remote-tracking refs directly — the feature branches do **not** need to be checked out locally. `git fetch origin` is enough to bring their tips up to date (and to pick up any new branch that may have been added to origin's `$MergeOrder` since the last fetch).
+    By default the script merges your **local** feature branches (at whatever commit they are), warning per branch when a local branch diverges from its `origin/*` counterpart so nothing enters the build unnoticed; a branch with no local copy falls back to `origin/<branch>`. Pass `-FromOrigin` to merge the pushed `origin/*` refs instead — in that mode the feature branches need not be checked out locally.
 2. Run the rebuild script (PowerShell 5.1+ on Windows, no dependencies beyond git and cargo):
     ```shell
-    powershell.exe -File .\scripts\Rebuild-EnterpriseIntegration.ps1
+    powershell.exe -File .\scripts\Merge-Branches.ps1
     ```
-    Available flags: `-DryRun` (print each command without executing), `-NoChecks` (skip fmt/clippy gate). In order, the script:
-    * resets `local/release-merge-wasm32` to the local `master` branch,
+    Available flags: `-DryRun` (print each command without executing), `-NoChecks` (skip fmt/clippy gate), `-FromOrigin` (merge the pushed `origin/*` instead of the local branches), `-Snapshot <tag>` (rebuild a frozen snapshot instead of the live branches — see below). In order, the script:
+    * resets `local/merge-wasm32` to the local `master` branch,
     * merges each feature branch with `--no-ff` in the order defined by `$MergeOrder`,
     * runs `rustfmt --check --edition 2024` on files touched by the branch,
     * runs `cargo +beta clippy --all --tests` with JSON-parsed output, gating only findings that fall on files modified by the branch (upstream lints stay informational),
-    * chains `local/release-merge-wasm64` on top of the wasm32 tip by resetting it to wasm32 and merging `origin/add-wasm64-target`.
-    By construction, `git diff local/release-merge-wasm32 local/release-merge-wasm64` equals the wasm64 feature patch.
+    * chains `local/merge-wasm64` on top of the wasm32 tip by resetting it to wasm32 and merging `add-wasm64-target` (from the same source as the other branches).
+    By construction, `git diff local/merge-wasm32 local/merge-wasm64` equals the wasm64 feature patch.
 3. Test the resulting builds (desktop and/or web for wasm32; web with a Memory64-capable browser for wasm64).
-4. If validated, tag each release tip and push the tags:
+4. If validated, tag each release tip with an annotated release tag and push the tags. The release-tag naming standard is not yet fixed — substitute your chosen scheme for `<release-tag>`:
     ```shell
-    git tag -a enterprise-vX.Y.Z-wasm32 -m "Enterprise release X.Y.Z (wasm32)"
-    git tag -a enterprise-vX.Y.Z-wasm64 -m "Enterprise release X.Y.Z (wasm64)"
-    git push origin enterprise-vX.Y.Z-wasm32 enterprise-vX.Y.Z-wasm64
+    git tag -a <release-tag>-wasm32 -m "..."
+    git tag -a <release-tag>-wasm64 -m "..."
+    git push origin <release-tag>-wasm32 <release-tag>-wasm64
     ```
+
+### Freezing and rebuilding a snapshot
+
+The live procedure above merges your current feature branches (local by default). To pin the exact set of inputs that produced a build — so it can be rebuilt later, on any machine — freeze them into an immutable `snapshot-<tag>/*` tag namespace with [`scripts/Tag-Snapshot.ps1`](scripts/Tag-Snapshot.ps1):
+
+```shell
+powershell.exe -File .\scripts\Tag-Snapshot.ps1 -Snapshot <tag>
+```
+
+This tags `snapshot-<tag>/master`, `snapshot-<tag>/ruffle-enterprise` (the tooling) and `snapshot-<tag>/<branch>` for every feature branch — pure pointers, no history is copied. A snapshot captures **published** state: each feature-branch pointer resolves to the pushed `origin/<branch>` when present (else the local branch), so push before snapshotting. `<tag>` is an opaque label; the naming standard is deliberately left open. Push the namespace to make the fallback durable off-machine (the script prints the exact command).
+
+To rebuild a frozen snapshot, pass `-Snapshot <tag>` to the merge script: it merges the `snapshot-<tag>/*` tags instead of the live branches, into `local/merge-wasm32-<tag>` / `local/merge-wasm64-<tag>` (the output always stays under `local/`, never in the immutable namespace), and implies `-NoChecks`:
+
+```shell
+powershell.exe -File .\scripts\Merge-Branches.ps1 -Snapshot <tag>
+```
+
+To reproduce a snapshot **exactly**, use that snapshot's own frozen tooling rather than the live script — its `$MergeOrder` is pinned, whereas the live one evolves:
+
+```shell
+git show snapshot-<tag>/ruffle-enterprise:scripts/Merge-Branches.ps1 > run.ps1
+powershell.exe -File run.ps1 -Snapshot <tag>
+```
 
 ### What the script reads and touches
 
-* **Every merge reads `origin/<branch>` remote-tracking refs, never local branches.** If a same-named local branch exists, it is **ignored regardless of its state** — ahead of origin, behind, diverged, with uncommitted mods, whatever. A commit that has not been pushed to origin **will not appear** in the integration build, even when it exists on a local branch you are currently checked out on. This enforces a "push to publish" discipline that keeps releases fully determined by the state of `origin`: any two clones running the script against the same origin snapshot produce the same commit tree.
+* **Source of the feature branches.** By default each merge reads your **local** feature branch when one exists — so work you have committed locally but not pushed is built and can be tested before publishing — falling back to `origin/<branch>` when no local branch exists. The script warns per branch when the local tip diverges from `origin/*` (ahead / behind / diverged), so nothing enters the build unnoticed. Pass `-FromOrigin` for the opposite discipline: merge only the pushed `origin/*`, so the build is fully determined by the remote and any two clones produce the same tree ("push to publish"). Reproducible, machine-independent builds are the job of `-Snapshot` (frozen tags), not of the live path.
 
-* **Working-tree caveat.** The script begins by checking out `local/release-merge-wasm32`. If the branch you are currently on has uncommitted modifications to a file whose contents differ on the target branch, `git checkout` will refuse with `your local changes would be overwritten by checkout`. Commit, stash, or discard those modifications and re-run. The feature branches themselves are never checked out by the script — their contents are read through the remote-tracking ref rather than via a checkout — so any local feature-branch working state remains untouched by a rebuild.
+* **Working-tree caveat.** The script begins by checking out `local/merge-wasm32` (or `local/merge-wasm32-<tag>` with `-Snapshot`). If the branch you are currently on has uncommitted modifications to a file whose contents differ on the target branch, `git checkout` will refuse with `your local changes would be overwritten by checkout`. Commit, stash, or discard those modifications and re-run. The feature branches themselves are never checked out by the script — their contents are read through the branch ref (local by default, `origin/*` under `-FromOrigin`) rather than via a checkout — so any feature-branch working state remains untouched by a rebuild.
 
 ### Design notes
 
@@ -141,7 +164,7 @@ Per-branch design notes, when present, live under [`docs/`](docs/) on the [`ruff
 | [`master`](../../tree/master) | Strict mirror of [upstream `ruffle-rs/ruffle@master`](https://github.com/ruffle-rs/ruffle). Never committed to directly; advanced only via `git fetch upstream && git merge --ff-only`. |
 | [`ruffle-enterprise`](../../tree/ruffle-enterprise) | **Fork identity branch (default landing branch).** Carries only the fork-only meta assets (this README, `scripts/`, `docs/`) as a thin linear layer above `master`. Rebased on top of `master` when upstream advances (via a separate helper script). Not intended for building and not a parent of the integration branch — its content is deliberately kept isolated so the build integration stays a pure "master + features" tree. |
 
-The integration branches (`local/release-merge-wasm32` and `local/release-merge-wasm64`) are **not published** here: they are ephemeral local artefacts rebuilt from scratch on every release. Their releases are published as tags (`enterprise-vX.Y.Z-wasm32` / `-wasm64`), which are the correct target for anyone wanting a fixed reference to a validated build.
+The integration branches (`local/merge-wasm32` and `local/merge-wasm64`) are **not published** here: they are ephemeral local artefacts rebuilt from scratch on every release. Their releases are published as immutable release tags, which are the correct target for anyone wanting a fixed reference to a validated build.
 
 ### Memory & E4X data workloads
 
@@ -185,7 +208,7 @@ The integration branches (`local/release-merge-wasm32` and `local/release-merge-
 
 | Branch | Upstream PR | Summary |
 | --- | --- | --- |
-| [`add-wasm64-target`](../../tree/add-wasm64-target) | [#23981](https://github.com/ruffle-rs/ruffle/pull/23981) (closed — pending ecosystem maturity) | Opt-in `wasm64-unknown-unknown` (Memory64) build target alongside the standard `wasm32` builds. Lifts the 4 GiB linear-memory ceiling on browsers supporting Memory64 (Chrome / Firefox via V8 / SpiderMonkey). Tier-3 Rust target, requires `-Z build-std`. Closed upstream pending crate-ecosystem support; retained here as the feature branch merged into the `local/release-merge-wasm64` integration on top of the wasm32 build. |
+| [`add-wasm64-target`](../../tree/add-wasm64-target) | [#23981](https://github.com/ruffle-rs/ruffle/pull/23981) (closed — pending ecosystem maturity) | Opt-in `wasm64-unknown-unknown` (Memory64) build target alongside the standard `wasm32` builds. Lifts the 4 GiB linear-memory ceiling on browsers supporting Memory64 (Chrome / Firefox via V8 / SpiderMonkey). Tier-3 Rust target, requires `-Z build-std`. Closed upstream pending crate-ecosystem support; retained here as the feature branch merged into the `local/merge-wasm64` integration on top of the wasm32 build. |
 | [`pluggable-font-renderer`](../../tree/pluggable-font-renderer) | [#23492](https://github.com/ruffle-rs/ruffle/pull/23492) (open) | Indirection layer in the device-font rasterization path so embedders can plug in an external rasterizer module (the reference implementation drives GDI on Windows for pixel-perfect parity with native Flash Player). See [`docs/pluggable-font-renderer.html`](docs/pluggable-font-renderer.html). |
 
 
@@ -194,8 +217,8 @@ The integration branches (`local/release-merge-wasm32` and `local/release-merge-
 * **`master`** is a strict mirror of upstream. It is advanced via `git fetch upstream && git merge --ff-only`; no commit lands directly on it. Tags and releases produced by upstream are not republished here.
 * **`ruffle-enterprise`** carries only fork-only meta assets (this README, `scripts/`, `docs/`) as a thin linear layer above `master`. When `master` advances, it is rebased on the new tip and force-pushed. It contains no functional code changes and does not feed into the integration branch.
 * Each `fix-*`, `add-*` and single-feature branch is rebased on top of `master` and intended to be submittable as a self-contained PR. The upstream PR number, where one exists, is listed in the tables above and is the authoritative description of the patch.
-* The `local/release-merge-wasm32` / `local/release-merge-wasm64` integration branches are **local, ephemeral build artefacts**: rebuilt fresh from `master + feature branches` on every run of the rebuild script, and intentionally never pushed to the remote. The base branch `ruffle-enterprise` is kept out of that chain so the integration stays a pure "master + features" tree. They are not intended to be submitted upstream.
-* **Releases are published as tags**, not as branches. Tags follow the pattern `enterprise-vX.Y.Z-wasm32` / `-wasm64` and point at the validated tip of the corresponding integration branch. They are immutable and are the correct reference for anyone wanting to check out a specific release build.
+* The `local/merge-wasm32` / `local/merge-wasm64` integration branches are **local, ephemeral build artefacts**: rebuilt fresh from `master + feature branches` on every run of the merge script, and intentionally never pushed to the remote. The base branch `ruffle-enterprise` is kept out of that chain so the integration stays a pure "master + features" tree. They are not intended to be submitted upstream.
+* **Releases are published as tags**, not as branches. A release tag points at the validated tip of the corresponding integration branch (the exact naming standard is not yet fixed); it is immutable and is the correct reference for anyone wanting to check out a specific release build. Point-in-time input sets are additionally frozen under the immutable `snapshot-<tag>/*` namespace.
 * **Issues filed on this repository should concern this fork** — Flex enterprise workloads, the patches listed above, or release packaging. For upstream bugs unrelated to this scope, please file them on [ruffle-rs/ruffle/issues](https://github.com/ruffle-rs/ruffle/issues).
 
 
@@ -213,7 +236,7 @@ The directory layout is unchanged from upstream, with two fork-specific addition
 - `wstr` — a Flash-compatible implementation of strings
 - `scanner` — a utility to bulk parse SWF files
 - `exporter` — a utility to generate PNG screenshots of a SWF file
-- `scripts` — **(fork-specific)** rebuild-integration and branch-rebase automation for producing release builds
+- `scripts` — **(fork-specific)** branch automation: `Merge-Branches.ps1` (merge feature branches into the local integration branches), `Rebase-Branches.ps1` (restack them on an updated upstream master), `Tag-Snapshot.ps1` (freeze a point-in-time input set under `snapshot-<tag>/`)
 - `docs` — **(fork-specific)** per-branch design references (one self-contained HTML per feature branch), collected here so the feature branches and their upstream PRs stay code-only
 
 
