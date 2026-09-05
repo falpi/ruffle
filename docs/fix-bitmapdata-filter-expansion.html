@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en" data-doc="fix-bitmapdata-filter-expansion">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BitmapData Filter Expansion — Ruffle</title>
+<style>
+    :root{
+        --bg:#ffffff; --surface:#f6f6f4; --surface2:#efeee9;
+        --text:#1d1d1b; --text2:#5f5e5a;
+        --border:#d3d1c7; --border2:#b4b2a9;
+        --accent:#534ab7; --accent-soft:#7f77dd;
+        --good:#1d9e75; --warn:#d85a30; --info:#378add;
+        --code-bg:#f1efe8;
+    }
+    @media (prefers-color-scheme: dark){
+        :root{
+            --bg:#1a1a18; --surface:#242420; --surface2:#2c2c28;
+            --text:#ecece9; --text2:#b4b2a9;
+            --border:#444441; --border2:#5f5e5a;
+            --accent:#afa9ec; --accent-soft:#7f77dd;
+            --good:#5dcaa5; --warn:#f0997b; --info:#85b7eb;
+            --code-bg:#26261f;
+        }
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{
+        margin:0; background:var(--bg); color:var(--text);
+        font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+        font-size:16px; line-height:1.65;
+    }
+    .wrap{max-width:900px; margin:0 auto; padding:48px 28px 96px}
+    header.doc{border-bottom:1px solid var(--border); padding-bottom:24px; margin-bottom:8px}
+    header.doc h1{font-size:30px; margin:0 0 6px; letter-spacing:-.01em}
+    header.doc .sub{color:var(--text2); font-size:15px}
+    header.doc dl{display:grid; grid-template-columns:max-content 1fr; gap:2px 16px; margin:18px 0 0; font-size:13px}
+    header.doc dt{color:var(--text2); text-transform:uppercase; letter-spacing:.05em; font-size:11px; padding-top:2px}
+    header.doc dd{margin:0}
+    header.doc code{font-size:12px}
+    h2{font-size:23px; margin:52px 0 4px; letter-spacing:-.01em; scroll-margin-top:20px}
+    h2 .n{color:var(--accent); font-variant-numeric:tabular-nums; margin-right:10px}
+    h3{font-size:17px; margin:30px 0 4px; scroll-margin-top:20px}
+    h4{font-size:15px; margin:22px 0 2px; color:var(--text)}
+    p{margin:12px 0}
+    a{color:var(--accent)}
+    code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86em;
+        background:var(--code-bg); padding:.12em .4em; border-radius:4px}
+    pre{background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+        padding:14px 16px; overflow:auto; font-size:12.5px; line-height:1.5}
+    pre code{background:none; padding:0; font-size:inherit}
+    .lead{font-size:18px; color:var(--text)}
+    ul,ol{padding-left:22px} li{margin:5px 0}
+    nav.toc{background:var(--surface); border:1px solid var(--border); border-radius:10px;
+        padding:18px 22px; margin:28px 0 8px}
+    nav.toc strong{display:block; font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+        color:var(--text2); margin-bottom:8px}
+    /* The entry text carries its own hardcoded numbering ("1.", "1.1", …),
+       so the list markers are suppressed. Single column: the list is
+       slightly indented from the "Contents" label, and nested lists are
+       indented further under their section. */
+    nav.toc ol{list-style:none; margin:0; padding:0; font-size:14px}
+    nav.toc > ol{padding-left:24px}
+    nav.toc ol ol{padding-left:18px; margin-top:2px}
+    nav.toc a{text-decoration:none; color:var(--text)}
+    nav.toc a:hover{color:var(--accent)}
+    .note{border-left:3px solid var(--accent); background:var(--surface);
+        padding:12px 16px; border-radius:0 8px 8px 0; margin:18px 0; font-size:15px}
+    .note .lbl{font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.05em;
+        color:var(--text2); display:block; margin-bottom:2px}
+    figure{margin:24px 0; background:var(--surface); border:1px solid var(--border);
+        border-radius:10px; padding:20px}
+    figure svg{display:block; width:100%; height:auto}
+    figcaption{color:var(--text2); font-size:13px; margin-top:12px; text-align:center}
+    table{width:100%; border-collapse:collapse; margin:20px 0; font-size:14px}
+    th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:top}
+    th{font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--text2);
+        border-bottom:2px solid var(--border2)}
+    td code{white-space:nowrap}
+    .footer{margin-top:64px; padding-top:20px; border-top:1px solid var(--border);
+        color:var(--text2); font-size:13px}
+    svg text{font-family:ui-sans-serif,system-ui,sans-serif}
+    .s-h{font-weight:600; fill:var(--text); font-size:12px}
+    .s-t{fill:var(--text); font-size:11px}
+    .s-s{fill:var(--text2); font-size:9px}
+    .s-mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+    .s-box{fill:var(--bg); stroke:var(--border2); stroke-width:1.4}
+    .s-hi{fill:var(--accent); fill-opacity:.13; stroke:var(--accent); stroke-width:1.6}
+    .s-acc{fill:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+    <h1>BitmapData Filter Expansion</h1>
+    <div class="sub">Why Flex tooltips lost their drop shadow, and the two-sided fix: a real <code>generateFilterRect</code> and an <code>applyFilter</code> that writes the expanded output.</div>
+    <dl>
+        <dt>Project</dt><dd>Ruffle — Flash Player emulator (Rust + WebAssembly)</dd>
+        <dt>Branch</dt><dd><code>fix-bitmapdata-filter-expansion</code> (cut from upstream master, PR pending)</dd>
+        <dt>Commit</dt><dd><code>core/render: Implement BitmapData.generateFilterRect</code></dd>
+        <dt>Footprint</dt><dd>8 files, +241/−26 — <code>render/src/filters.rs</code>, <code>render/src/backend.rs</code>, <code>render/wgpu/src/backend.rs</code>, <code>core/src/avm2/globals/flash/display/BitmapData.as</code>, <code>core/src/avm2/globals/flash/display/bitmap_data.rs</code>, <code>core/src/avm2/globals/flash/display/display_object.rs</code>, <code>core/src/avm1/globals/bitmap_data.rs</code>, <code>core/src/bitmap/operations.rs</code></dd>
+        <dt>Audience</dt><dd>Maintainers, reviewers, anyone chasing missing <code>BitmapData</code> filter output vs Flash Player</dd>
+        <dt>Scope</dt><dd><code>BitmapData.generateFilterRect</code> (AVM1 + AVM2) and the region <code>BitmapData.applyFilter</code> writes (wgpu backend). Display-object filters (<code>DisplayObject.filters</code>) are untouched — they already render into pre-expanded offscreen surfaces.</dd>
+    </dl>
+</header>
+
+<p style="margin-top:22px" class="lead">
+    Every default Flex tooltip renders in Ruffle without its drop shadow, and with a squarish bottom edge
+    instead of the rounded one Flash Player shows. The shadow is not a display-object filter: Flex
+    pre-renders it through <code>BitmapData.generateFilterRect</code> + <code>applyFilter</code> and copies
+    it in slices. <code>generateFilterRect</code> was a stub in Ruffle, so the slice thicknesses came out as
+    zero and the shadow silently vanished. This document explains the Flex mechanism, the two independent
+    gaps in Ruffle that both had to close, and how the fix keeps the two APIs mutually consistent by
+    construction.
+</p>
+
+<nav class="toc" aria-label="Contents">
+    <strong>Contents</strong>
+    <ol>
+        <li><a href="#symptom">1. The symptom</a></li>
+        <li><a href="#flex">2. How Flex draws a tooltip shadow</a>
+            <ol>
+                <li><a href="#skin">2.1 The skin pipeline</a></li>
+                <li><a href="#rds">2.2 RectangularDropShadow</a></li>
+            </ol>
+        </li>
+        <li><a href="#gaps">3. The two gaps in Ruffle</a>
+            <ol>
+                <li><a href="#gap1">3.1 generateFilterRect was a stub</a></li>
+                <li><a href="#gap2">3.2 applyFilter clipped its output to the source rect</a></li>
+                <li><a href="#together">3.3 Why the halves only work together</a></li>
+            </ol>
+        </li>
+        <li><a href="#fix">4. The fix</a>
+            <ol>
+                <li><a href="#margins">4.1 One source of truth: <code>calculate_dest_margins</code></a></li>
+                <li><a href="#native">4.2 Native generateFilterRect (AVM2 + AVM1)</a></li>
+                <li><a href="#padded">4.3 Padded filtering in the wgpu backend</a></li>
+            </ol>
+        </li>
+        <li><a href="#fidelity">5. Fidelity and behavior notes</a></li>
+        <li><a href="#impact">6. Impact and coverage</a></li>
+        <li><a href="#testing">7. Testing</a></li>
+    </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="symptom"><span class="n">1</span>The symptom</h2>
+<p>
+    Compared side by side with Flash Player, the default <code>mx.controls.ToolTip</code> in Ruffle is
+    missing two things at once: the soft drop shadow below and beside the yellow face, and the visibly
+    rounder bottom corners. Both are the same pixels. The tooltip face is drawn with
+    <code>cornerRadius&nbsp;=&nbsp;2</code>; the "rounded bottom border" seen in Flash Player <em>is the
+    shadow</em>, drawn with radius <code>cornerRadius&nbsp;+&nbsp;2</code> and offset 3px downwards, hugging
+    the bottom edge. Lose the shadow and both effects disappear together — silently, with no error and no
+    visual artifact other than absence.
+</p>
+<p>
+    The only runtime trace was a stub warning in the console:
+    <code>flash.display.BitmapData.generateFilterRect is a stub</code>.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="flex"><span class="n">2</span>How Flex draws a tooltip shadow</h2>
+
+<h3 id="skin">2.1 The skin pipeline</h3>
+<p>
+    The tooltip skin is <code>mx.skins.halo.ToolTipBorder</code> — also under the Flex&nbsp;4 Spark theme,
+    because the framework's <code>defaults.css</code> assigns it (<code>borderSkin</code> +
+    <code>borderStyle: "toolTip"</code>) and the Spark theme does not override the <code>ToolTip</code>
+    selector. For the default <code>"toolTip"</code> border style the skin draws the face, then delegates
+    the shadow:
+</p>
+<pre><code>// mx.skins.halo.ToolTipBorder, borderStyle "toolTip"
+drawRoundRect(3, 1, w - 6, h - 4, cornerRadius, backgroundColor, backgroundAlpha);
+
+dropShadow.distance = 3;   dropShadow.angle = 90;
+dropShadow.color    = 0;   dropShadow.alpha = 0.4;
+dropShadow.tlRadius = dropShadow.trRadius =
+dropShadow.blRadius = dropShadow.brRadius = cornerRadius + 2;
+dropShadow.drawShadow(graphics, 3, 0, w - 6, h - 4);</code></pre>
+<p>
+    Note what this is <em>not</em>: it is not <code>filters = [new DropShadowFilter(…)]</code> on the
+    display object. For performance, Flex pre-renders the shadow once into bitmaps and tiles it with
+    <code>beginBitmapFill</code>, so that animating or moving the tooltip never re-runs the filter.
+</p>
+
+<h3 id="rds">2.2 RectangularDropShadow</h3>
+<p>
+    <code>mx.graphics.RectangularDropShadow.createShadowBitmaps()</code> is where both Ruffle APIs enter the
+    picture:
+</p>
+<ol>
+    <li>It draws a small white round rectangle into a scratch <code>BitmapData</code> — just large enough to
+        carry the four corner radii.</li>
+    <li>It asks <code>generateFilterRect(inputRect, filter)</code> how far a
+        <code>DropShadowFilter(distance=3, angle=90, blurX=4, blurY=4)</code> expands that rectangle, and
+        derives the shadow thickness on each edge by difference:
+        <code>leftThickness = inputRect.left − outputRect.left</code>, and so on for right, top, bottom.</li>
+    <li>It allocates the shadow bitmap at the <em>expanded</em> size, and calls
+        <code>applyFilter(…, new Point(leftThickness, topThickness), filter)</code> with
+        <code>knockout = true</code>, so the bitmap contains only shadow, transparent where the face will
+        sit.</li>
+    <li>It cuts four 1px strips (left/right/top/bottom edges) out of the result. <code>drawShadow()</code>
+        then tiles corners and strips around the face with <code>beginBitmapFill</code> — every copy guarded
+        by the strips existing: <code>if (leftShadow || topShadow) { … }</code>.</li>
+</ol>
+
+<figure>
+<svg viewBox="0 0 820 300" role="img" aria-labelledby="fig1t fig1d">
+    <title id="fig1t">Figure 1 — shadow slice thicknesses derived from generateFilterRect</title>
+    <desc id="fig1d">Two panels. Left, Flash Player: the filter output rect is larger than the source rect, the differences become the edge thicknesses, and edge strips plus corners are sliced out of the shadow bitmap. Right, Ruffle before the fix: the output rect equals the source rect, all four thicknesses are zero, no strips exist, and nothing is drawn.</desc>
+    <!-- left panel: Flash -->
+    <g>
+        <text class="s-h" x="205" y="26" text-anchor="middle">Flash Player</text>
+        <!-- output rect (expanded) -->
+        <rect x="60" y="52" width="290" height="190" rx="10" class="s-hi"/>
+        <!-- input rect -->
+        <rect x="105" y="90" width="200" height="105" rx="6" class="s-box"/>
+        <text class="s-t" x="205" y="147" text-anchor="middle">inputRect</text>
+        <text class="s-s s-mono" x="205" y="163" text-anchor="middle">round rect bitmap</text>
+        <text class="s-s" x="205" y="76" text-anchor="middle">outputRect = generateFilterRect(inputRect, filter)</text>
+        <!-- thickness arrows -->
+        <line x1="60" y1="142" x2="105" y2="142" stroke="var(--warn)" stroke-width="2"/>
+        <text class="s-s" x="82" y="134" text-anchor="middle">left</text>
+        <line x1="305" y1="142" x2="350" y2="142" stroke="var(--warn)" stroke-width="2"/>
+        <text class="s-s" x="328" y="134" text-anchor="middle">right</text>
+        <line x1="180" y1="195" x2="180" y2="242" stroke="var(--warn)" stroke-width="2"/>
+        <text class="s-s" x="196" y="226">bottom</text>
+        <text class="s-s" x="205" y="266" text-anchor="middle">thickness = inputRect edge − outputRect edge → 1px strips sliced per edge</text>
+        <text class="s-s" x="205" y="282" text-anchor="middle">drawShadow() tiles strips + corners → shadow visible</text>
+    </g>
+    <!-- right panel: Ruffle before -->
+    <g>
+        <text class="s-h" x="615" y="26" text-anchor="middle">Ruffle (before)</text>
+        <!-- output rect == input rect -->
+        <rect x="515" y="90" width="200" height="105" rx="6" class="s-box"/>
+        <rect x="511" y="86" width="208" height="113" rx="8" fill="none" stroke="var(--warn)" stroke-width="1.6" stroke-dasharray="5 4"/>
+        <text class="s-t" x="615" y="137" text-anchor="middle">inputRect</text>
+        <text class="s-s s-mono" x="615" y="153" text-anchor="middle">outputRect = sourceRect.clone()</text>
+        <text class="s-s" x="615" y="222" text-anchor="middle">all four thicknesses = 0 → all strips null</text>
+        <text class="s-s" x="615" y="238" text-anchor="middle">every copy is guarded: if (leftShadow || topShadow) …</text>
+        <text class="s-s" x="615" y="254" text-anchor="middle">drawShadow() draws nothing — silently</text>
+    </g>
+</svg>
+<figcaption>Figure 1. The slice thicknesses exist only as the difference between
+<code>generateFilterRect</code>'s output and its input. A stub that returns the input verbatim
+zeroes every thickness and disables the whole mechanism.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="gaps"><span class="n">3</span>The two gaps in Ruffle</h2>
+
+<h3 id="gap1">3.1 generateFilterRect was a stub</h3>
+<p>
+    In AVM2 the method lived in ActionScript (<code>BitmapData.as</code>) and returned
+    <code>sourceRect.clone()</code> after logging a stub warning, with one special case already handled
+    (Flash reports the entire bitmap for a <code>ShaderFilter</code>). In AVM1 it was an
+    <code>avm1_stub!</code> returning <code>undefined</code>. Either way: no expansion, thicknesses zero,
+    shadow gone — see Figure&nbsp;1.
+</p>
+
+<h3 id="gap2">3.2 applyFilter clipped its output to the source rect</h3>
+<p>
+    Independently, the wgpu backend rendered every <code>applyFilter</code> into an intermediate texture
+    <em>the size of the source rect</em> (each filter's target is created at <code>source.size</code>) and
+    copied that to the destination at <code>destPoint</code>. Pixels a filter produces <em>beyond</em> the
+    source rect — blur margins on all sides, the drop shadow's distance offset — were never rendered at all.
+    A pre-existing <code>FIXME</code> in <code>core/src/bitmap/operations.rs</code> acknowledged exactly
+    this.
+</p>
+<p>
+    Flash's semantics are different: <code>destPoint</code> is where the top-left corner of the source rect
+    lands in the destination, and the filtered output is written <em>around</em> it, covering the full
+    <code>generateFilterRect</code> region. <code>RectangularDropShadow</code> depends on this: it slices
+    its strips precisely from those beyond-the-source pixels.
+</p>
+
+<h3 id="together">3.3 Why the halves only work together</h3>
+<div class="note">
+    <span class="lbl">Hazard</span>
+    Fixing <code>generateFilterRect</code> alone would have made things <em>worse</em>. The shadow bitmap is
+    allocated at the expanded size with the <code>BitmapData</code> default fill — opaque white. If
+    <code>applyFilter</code> then only writes the source-rect region in its middle, the perimeter — exactly
+    the region the strips are sliced from — keeps its initial fill, and the tooltip gets tiled with
+    <strong>opaque white bars</strong> instead of no shadow. The report and the write must expand by the
+    same amount, in the same release.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="fix"><span class="n">4</span>The fix</h2>
+
+<h3 id="margins">4.1 One source of truth: <code>calculate_dest_margins</code></h3>
+<p>
+    Ruffle already had a filter-expansion estimate — <code>Filter::calculate_dest_rect</code>, used to size
+    the offscreen surfaces of display-object filters — but it is deliberately generous (its blur pass
+    scaling is documented as "very approximate to Flash"). That is harmless for an offscreen size and wrong
+    for <code>applyFilter</code>, where the margins define exactly which destination pixels get
+    <em>replaced</em>. The fix adds a separate, exact method and makes <em>both</em> halves of the API
+    consume it:
+</p>
+<pre><code>/// How far a filter's output extends beyond the source image
+/// on each edge, in pixels.
+pub struct FilterMargins { pub left: u32, pub top: u32, pub right: u32, pub bottom: u32 }
+
+impl Filter {
+    /// `BitmapData.generateFilterRect` reports this expansion and
+    /// `BitmapData.applyFilter` writes it, so both must use this method.
+    pub fn calculate_dest_margins(&self) -> FilterMargins { … }
+}</code></pre>
+<p>
+    The per-filter values follow Flash Player, measured from Flash-captured test goldens (§7): a blur of
+    strength <code>b</code> with <code>q</code> passes reaches <code>ceil((b&nbsp;−&nbsp;1)&nbsp;·&nbsp;q&nbsp;/&nbsp;2)</code>
+    pixels per side (blur&nbsp;4 quality&nbsp;1 writes exactly 2 pixels beyond the source rect); a drop
+    shadow adds its distance offset, ceiled, on the side it points towards (inner shadows and inner glows
+    don't expand at all); a bevel adds the offset on both sides. <code>calculate_dest_rect</code> and the
+    display-object pipeline are untouched. Consistency between "what we report" and "what we write" is
+    structural rather than a convention to maintain.
+</p>
+
+<h3 id="native">4.2 Native generateFilterRect (AVM2 + AVM1)</h3>
+<p>
+    The AVM2 method became a <code>native function</code>; the Rust side
+    (<code>generate_filter_rect</code> in <code>bitmap_data.rs</code>) converts the filter with the same
+    <code>Filter::from_avm2_object</code> that <code>applyFilter</code> already uses, floors/ceils the source
+    rect to whole pixels with the same rules as <code>applyFilter</code>'s
+    <code>source_point</code>/<code>source_size</code>, applies the margins, and builds the result via the
+    (previously private, now <code>pub</code>) <code>new_rectangle</code> helper. The ShaderFilter special
+    case — Flash reports the whole bitmap, ignoring <code>sourceRect</code> — moved from ActionScript into
+    the native method unchanged. The AVM1 stub got the same implementation on top of the same helper,
+    returning a <code>flash.geom.Rectangle</code> through the AVM1 constructor.
+</p>
+<p>
+    For the tooltip's filter (blur 4×4 at quality 1, distance 3 at 90°) the margins come out as 2px on
+    left/right/top and 5px on the bottom — the blur reach on every side, plus the distance offset only on
+    the side the shadow moves towards.
+</p>
+
+<h3 id="padded">4.3 Padded filtering in the wgpu backend</h3>
+<p>
+    <code>WgpuRenderBackend::apply_filter</code> now pads before it filters, reproducing two more pieces of
+    Flash semantics that the goldens revealed (§7): <strong>a blur samples real source pixels beyond the
+    source rect</strong> (as long as they exist in the source bitmap), and <strong>beyond the bitmap's
+    physical bounds everything is transparent</strong> (not edge-replicated, as the old UV clamping
+    effectively did).
+</p>
+<ol>
+    <li>Compute <code>margins = filter.calculate_dest_margins()</code>. If they are all zero
+        (e.g. a color matrix), the previous code path runs unchanged.</li>
+    <li>Create an intermediate texture of the padded size. For a <em>blur</em>, the padding is doubled — a
+        write ring plus a sampling ring — and the copy from the source texture covers the source rect
+        <em>grown by the whole padding</em>, clamped to the bitmap's bounds: the written margins blur real
+        neighbor pixels, exactly like Flash. For filters that composite the source over their output (glow,
+        drop shadow, bevel) the copy covers the source rect only — neighbor pixels in the padding would get
+        painted into the margins — so their padding stays transparent. Whatever the copy doesn't cover
+        stays transparent, because wgpu zero-initializes textures.</li>
+    <li>Run the filter over the <em>entire</em> padded texture
+        (<code>FilterSource::for_entire_texture</code>). Blur spreads into the margins; the drop shadow's
+        offset lands inside them instead of being clipped.</li>
+    <li>Copy the write region (padded output minus the sampling ring) to the destination at
+        <code>dest_point − (margins.left, margins.top)</code>. The existing clamping already handles the
+        now-possibly-negative destination coordinates.</li>
+</ol>
+
+<figure>
+<svg viewBox="0 0 820 260" role="img" aria-labelledby="fig2t fig2d">
+    <title id="fig2t">Figure 2 — padded applyFilter in the wgpu backend</title>
+    <desc id="fig2d">Three stages. First, the source rect is copied into the middle of a larger, transparent padded texture. Second, the filter runs over the whole padded texture, so shadow and blur fill the margins. Third, the padded result is copied to the destination shifted up and left by the margins, so the source corner still lands on destPoint.</desc>
+    <!-- stage 1: padded copy -->
+    <g>
+        <text class="s-h" x="140" y="26" text-anchor="middle">1 · pad</text>
+        <rect x="45" y="46" width="190" height="150" rx="8" class="s-box" stroke-dasharray="5 4"/>
+        <rect x="85" y="78" width="110" height="78" rx="4" class="s-hi"/>
+        <text class="s-t" x="140" y="122" text-anchor="middle">source rect</text>
+        <text class="s-s" x="140" y="176" text-anchor="middle">zero-initialized margins</text>
+        <text class="s-s s-mono" x="140" y="216" text-anchor="middle">size + margins, transparent</text>
+    </g>
+    <text class="s-t" x="275" y="126" text-anchor="middle">→</text>
+    <!-- stage 2: filter -->
+    <g>
+        <text class="s-h" x="410" y="26" text-anchor="middle">2 · filter whole texture</text>
+        <rect x="315" y="46" width="190" height="150" rx="8" class="s-box"/>
+        <rect x="345" y="86" width="120" height="86" rx="6" fill="var(--text2)" fill-opacity=".35"/>
+        <rect x="355" y="78" width="110" height="78" rx="4" class="s-hi"/>
+        <text class="s-t" x="410" y="122" text-anchor="middle">result</text>
+        <text class="s-s" x="410" y="216" text-anchor="middle">blur + offset land in the margins</text>
+    </g>
+    <text class="s-t" x="545" y="126" text-anchor="middle">→</text>
+    <!-- stage 3: blit -->
+    <g>
+        <text class="s-h" x="690" y="26" text-anchor="middle">3 · copy to destination</text>
+        <rect x="585" y="46" width="190" height="150" rx="8" class="s-box"/>
+        <circle cx="655" cy="98" r="3" class="s-acc"/>
+        <text class="s-s s-mono" x="663" y="94">destPoint</text>
+        <rect x="615" y="66" width="150" height="110" rx="6" fill="none" stroke="var(--good)" stroke-width="1.6" stroke-dasharray="5 4"/>
+        <text class="s-s" x="690" y="216" text-anchor="middle">origin = destPoint − (left, top) margins</text>
+    </g>
+</svg>
+<figcaption>Figure 2. The filter runs over a transparent padded copy of the source; the copy back into the
+destination is shifted by the margins, so the source's top-left corner still maps to
+<code>destPoint</code> while the expanded output surrounds it — Flash's semantics.</figcaption>
+</figure>
+
+<p>
+    Guards: padding is skipped when the margins are empty or when the padded texture would exceed
+    <code>max_texture_dimension_2d</code> (pathological blur/source combinations), falling back to the old
+    behavior instead of panicking. The intermediate uses the source texture's own format, so the
+    texture-to-texture copies are always format-compatible.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="fidelity"><span class="n">5</span>Fidelity and behavior notes</h2>
+<ul>
+    <li><strong>Margins are Flash-exact, measured from goldens.</strong> The blur write reach
+        <code>ceil((b−1)·q/2)</code> was validated pixel-by-pixel against Flash Player captures: the
+        <code>bitmapdata_filter_sourcerect</code> test — previously allowed 1700 outliers with a "way off
+        here compared to FP" comment — now passes with <em>zero</em> outliers (max channel difference 2).
+        The generous <code>calculate_dest_rect</code> stays in place for display-object filter bounds,
+        where over-estimation is harmless.</li>
+    <li><strong>Bitmap-edge semantics changed, matching Flash.</strong> The old code sampled the source via
+        UV coordinates with a clamping sampler: beyond the bitmap's physical edge it replicated edge
+        pixels. The Flash goldens show a fade instead — beyond the bitmap is transparent. In-place
+        full-bitmap blurs (<code>blur_quality</code>-style content) now fade at the edges like Flash
+        instead of staying saturated.</li>
+    <li><strong><code>applyFilter</code> now writes a larger region.</strong> Flash-correct, but content that
+        previously "got away" with the clipped output will now have its destination pixels replaced in the
+        expanded ring too (replacement, not blending — same as before, over a bigger area).</li>
+    <li><strong>0×0 source rects are still a noop.</strong> In Flash a filter on an empty source can still
+        emit its expansion; the early-return in <code>operations.rs</code> is kept (it also protects the
+        CPU fallback path from zero-sized regions) and its FIXME comment narrowed to this remaining case.</li>
+    <li><strong>Unsupported-filter fallback unchanged.</strong> Filters the backend rejects
+        (<code>is_filter_supported</code> false, e.g. gradient glow) never reach the padding code — core
+        still degrades them to a plain copy.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="impact"><span class="n">6</span>Impact and coverage</h2>
+<p>
+    In the Flex framework the mechanism this restores is used by:
+</p>
+<ul>
+    <li><code>mx.skins.halo.ToolTipBorder</code> — every default tooltip, under both Halo and Spark themes
+        (shadow + the rounded-bottom look);</li>
+    <li><code>mx.preloaders.DownloadProgressBar</code> and <code>SparkDownloadProgressBar</code> — the
+        preloader panel shadow.</li>
+</ul>
+<p>
+    Beyond Flex, any AVM1/AVM2 content that calls <code>generateFilterRect</code> (previously getting a
+    useless echo of its input) or relies on <code>applyFilter</code> writing blur margins or shadow offsets
+    outside the source rect now gets Flash-compatible behavior. Display-object filters are unaffected: that
+    pipeline already expanded its offscreen surfaces via the same <code>calculate_dest_rect</code>.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="testing"><span class="n">7</span>Testing</h2>
+<p>
+    The first iteration of this branch (margins derived from the approximate
+    <code>calculate_dest_rect</code>, transparent-only padding) failed six CI tests. The failures were
+    diagnosed by sampling the Flash-captured golden images pixel-by-pixel, which produced the three
+    measured facts the final design is built on: the exact blur write reach
+    (<code>bitmapdata_filter_sourcerect</code>: a 104×104 written region for a 100×100 rect with blur 4
+    quality 1); real-neighbor sampling beyond the source rect (same golden: a solid, full-strength ring
+    around the block, and red bleeding into black across the rect's edge); and transparency beyond the
+    physical bitmap (<code>bitmapdata_applyfilter_destpoint_edges</code>: a gradual fade outside the
+    bitmap, where edge replication would stay saturated).
+</p>
+<ul>
+    <li><strong><code>avm2/bitmapdata_filter_sourcerect</code></strong> (true Flash golden): passes with
+        0&nbsp;outliers, max channel difference 2 — down from the 1700-outlier allowance the old behavior
+        needed ("FIXME We're way off here compared to FP").</li>
+    <li><strong><code>bitmapdata_applyfilter_destpoint</code> / <code>_colormatrix</code></strong>
+        (AVM1 + AVM2): pass unchanged.</li>
+    <li><strong><code>avm2/bitmapdata_applyfilter_destpoint_edges</code></strong>: still
+        <code>known_failure</code> (it includes an unsupported <code>ConvolutionFilter</code>); its
+        Ruffle-canonical <code>output.ruffle.png</code> was regenerated for the new, closer-to-Flash
+        output.</li>
+    <li><strong>Regenerated Ruffle-canonical goldens</strong>: <code>bitmapdata_applyfilter_blur</code>,
+        <code>visual/filters/blur_quality</code>, <code>visual/filters/blur_fractional</code>,
+        <code>away3d_advanced_shallow_water_demo</code>. Their previous <code>output.expected.png</code>
+        files encoded the old no-expansion / edge-replication behavior: their git history shows they were
+        regenerated for unrelated Ruffle rendering changes (e.g. device-font spacing) — a Flash capture
+        would never change for those.</li>
+    <li><strong>gnash <code>BitmapData-v8</code></strong> (AVM1): only asserts the method exists — no
+        output changes.</li>
+    <li><strong>Build checks</strong>: <code>cargo check</code>, clippy and <code>cargo fmt</code> clean on
+        the touched crates.</li>
+    <li><strong>Visual verification</strong> (Flex app under the Electron shell): tooltip shadow and rounded
+        bottom edge restored; watch for regressions around other <code>applyFilter</code> call sites, since
+        they now legitimately write a larger region (§5).</li>
+</ul>
+
+<div class="footer">
+    Self-contained document — no external dependencies (figures are inline SVG). Light/dark theme follows
+    <code>prefers-color-scheme</code>. Editable directly as a text file. Companion documents:
+    <code>fix-blurry-grid-separators.html</code>, <code>pluggable-font-renderer.html</code>,
+    <code>tile-memory-allocator.html</code>, <code>xml-readonly-improvements.html</code>, <code>xml-notifications-completion.html</code>.
+</div>
+
+</div>
+</body>
+</html>

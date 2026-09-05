@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en" data-doc="add-export-instruments">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ExportUtils — native data export for AVM2</title>
+<style>
+  :root{
+    --bg:#ffffff; --surface:#f6f6f4; --surface2:#efeee9;
+    --text:#1d1d1b; --text2:#5f5e5a;
+    --border:#d3d1c7; --border2:#b4b2a9;
+    --accent:#534ab7; --accent-soft:#7f77dd;
+    --good:#1d9e75; --warn:#d85a30; --info:#378add;
+    --code-bg:#f1efe8;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#1a1a18; --surface:#242420; --surface2:#2c2c28;
+      --text:#ecece9; --text2:#b4b2a9;
+      --border:#444441; --border2:#5f5e5a;
+      --accent:#afa9ec; --accent-soft:#7f77dd;
+      --good:#5dcaa5; --warn:#f0997b; --info:#85b7eb;
+      --code-bg:#26261f;
+    }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:16px; line-height:1.65;
+  }
+  .wrap{max-width:900px; margin:0 auto; padding:48px 28px 96px}
+  header.doc{border-bottom:1px solid var(--border); padding-bottom:24px; margin-bottom:8px}
+  header.doc h1{font-size:30px; margin:0 0 6px; letter-spacing:-.01em}
+  header.doc .sub{color:var(--text2); font-size:15px}
+  header.doc .meta{color:var(--text2); font-size:13px; margin-top:14px}
+  header.doc .meta code{font-size:12px}
+  h2{font-size:23px; margin:52px 0 4px; letter-spacing:-.01em; scroll-margin-top:20px}
+  h2 .n{color:var(--accent); font-variant-numeric:tabular-nums; margin-right:10px}
+  h3{font-size:17px; margin:28px 0 4px}
+  p{margin:12px 0}
+  a{color:var(--accent)}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.88em;
+    background:var(--code-bg); padding:.12em .4em; border-radius:4px}
+  pre{background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+    padding:14px 16px; overflow:auto; font-size:13px; line-height:1.5}
+  pre code{background:none; padding:0}
+  .lead{font-size:18px; color:var(--text)}
+  ul,ol{padding-left:22px} li{margin:5px 0}
+  nav.toc{background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:18px 22px; margin:28px 0 8px}
+  nav.toc strong{display:block; font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--text2); margin-bottom:8px}
+  nav.toc ol{margin:0}
+  nav.toc a{text-decoration:none; color:var(--text)}
+  nav.toc a:hover{color:var(--accent)}
+  .note{border-left:3px solid var(--accent); background:var(--surface);
+    padding:12px 16px; border-radius:0 8px 8px 0; margin:18px 0; font-size:15px}
+  .note.good{border-color:var(--good)}
+  .note.warn{border-color:var(--warn)}
+  .note .lbl{font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--text2); display:block; margin-bottom:2px}
+  figure{margin:24px 0; background:var(--surface); border:1px solid var(--border);
+    border-radius:10px; padding:20px}
+  figure svg{display:block; width:100%; height:auto}
+  figcaption{color:var(--text2); font-size:13px; margin-top:12px; text-align:center}
+  table{width:100%; border-collapse:collapse; margin:20px 0; font-size:14px}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:top}
+  th{font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--text2);
+    border-bottom:2px solid var(--border2)}
+  td.num,th.num{text-align:right; font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,monospace}
+  tr.sum td{font-weight:600; border-top:2px solid var(--border2); background:var(--surface)}
+  .neg{color:var(--warn); font-weight:600}
+  td code{white-space:nowrap}
+  .def{color:var(--text2); font-family:ui-monospace,monospace; font-size:.9em}
+  svg text{font-family:ui-sans-serif,system-ui,sans-serif}
+  .s-ti{font-weight:600; fill:var(--text); font-size:14px}
+  .s-h{font-weight:600; fill:var(--text); font-size:12px}
+  .s-t{fill:var(--text); font-size:12px}
+  .s-s{fill:var(--text2); font-size:10px}
+  .s-mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+  .s-box{fill:var(--bg); stroke:var(--border2); stroke-width:1.5}
+  .s-surf{fill:var(--surface2); stroke:var(--border2); stroke-width:1.2}
+  .s-hi{fill:var(--accent); fill-opacity:.14; stroke:var(--accent); stroke-width:1.5}
+  .s-good{fill:var(--good); fill-opacity:.16; stroke:var(--good); stroke-width:1.5}
+  .s-warn{fill:var(--warn); fill-opacity:.16; stroke:var(--warn); stroke-width:1.5}
+  .s-line{stroke:var(--border2); stroke-width:1.5; fill:none}
+  .s-arrow{stroke:var(--accent); stroke-width:1.6; fill:none}
+  .s-acc{fill:var(--accent)} .s-good-f{fill:var(--good)} .s-warn-f{fill:var(--warn)}
+  .footer{margin-top:64px; padding-top:20px; border-top:1px solid var(--border);
+    color:var(--text2); font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <h1>ExportUtils</h1>
+  <div class="sub">A native AVM2 builtin for exporting tabular data to a downloadable file — formats, options, and the synchronous / asynchronous API.</div>
+  <div class="meta">
+    Ruffle &middot; AVM2 &nbsp;&middot;&nbsp; branch <code>local/test-merge-wasm32</code> &nbsp;&middot;&nbsp;
+    last updated 2026-07-02 &nbsp;&middot;&nbsp; single self-contained file (every diagram is inline SVG, no external dependencies).
+  </div>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#resolve">Resolving the class</a></li>
+    <li><a href="#api">API surface</a></li>
+    <li><a href="#rows">Row sources &amp; field selectors</a></li>
+    <li><a href="#options">The options bag</a></li>
+    <li><a href="#formats">Output formats</a></li>
+    <li><a href="#headers">Headers &amp; styling (xlsx)</a></li>
+    <li><a href="#sync">Synchronous export</a></li>
+    <li><a href="#async">Asynchronous (chunked) export</a></li>
+    <li><a href="#perf">Performance &amp; memory</a></li>
+    <li><a href="#gotchas">Notes &amp; gotchas</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="overview"><span class="n">1</span>Overview</h2>
+<p class="lead">
+  <strong>ExportUtils</strong> is a top-level native AVM2 class that turns in-memory tabular data into a
+  ready-to-save file, doing all the heavy work in Rust and handing back a <code>flash.utils.ByteArray</code>.
+</p>
+<p>
+  It reads straight over the raw data-provider structures already in memory — an <code>Array</code> of rows,
+  or an <code>XMLList</code> — without forcing the caller to flatten or copy them first, and it streams the
+  output so it stays usable on very large data sets (on the order of a million rows). The output format is
+  selected per call; <strong>xlsx</strong> (a real OOXML workbook) and <strong>CSV</strong> are supported
+  today, and the surface is designed so further formats can be added without changing the call sites.
+</p>
+<p>
+  Two execution models share the same configuration:
+</p>
+<ul>
+  <li><strong>Synchronous</strong> — one call builds the whole file and returns the bytes.</li>
+  <li><strong>Asynchronous</strong> — a chunked flow (begin / continue / end / cancel) that yields to the
+    runtime between blocks, so a large export does not freeze the UI and a progress indicator can advance.</li>
+</ul>
+<div class="note">
+  <span class="lbl">At a glance</span>
+  Everything travels through a single <code>options</code> object. Keys that do not apply to the chosen
+  format are silently ignored, so the same call shape works across formats and both execution models.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="resolve"><span class="n">2</span>Resolving the class</h2>
+<p>
+  <code>ExportUtils</code> lives in Ruffle's playerglobal, not in the stock Adobe one your SWF compiles
+  against. Resolve it at runtime with <code>getDefinitionByName</code> and guard for the case where the SWF
+  runs on a build (or a real Flash Player) that does not provide it:
+</p>
+<pre><code>import flash.utils.getDefinitionByName;
+import flash.utils.ByteArray;
+
+function exportClass():Class {
+    try {
+        return Class(getDefinitionByName("ExportUtils"));
+    } catch (e:Error) {
+        return null; // not running on a build that provides ExportUtils
+    }
+}</code></pre>
+<p>
+  All methods are <code>static</code>; the class is never instantiated. Because the SWF is compiled against
+  the stock playerglobal, the compiler knows neither <code>ExportUtils</code> nor its members &mdash; so call
+  them through <strong>dynamic bracket access</strong> on the resolved <code>Class</code> object
+  (<code>xport["syncExport"](&hellip;)</code>), <em>not</em> dotted access (<code>xport.syncExport(&hellip;)</code>),
+  which would fail to compile in strict mode. The examples below follow this pattern. (The handle returned by
+  <code>asyncExportBegin</code> is a dynamic <code>Object</code>, so its <code>__total</code>/<code>__done</code>
+  fields can be read with the dot syntax.)
+</p>
+
+<!-- ============================================================ -->
+<h2 id="api"><span class="n">3</span>API surface</h2>
+<p>
+  Five static methods: one for the synchronous path and four for the chunked one.
+</p>
+<table>
+  <thead><tr><th>Method</th><th>Returns</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><code>syncExport(rows, fields, header, options)</code></td><td><code>ByteArray</code></td>
+      <td>Build the entire file in one call and return the bytes.</td></tr>
+    <tr><td><code>asyncExportBegin(rows, fields, header, options)</code></td><td><code>Object</code></td>
+      <td>Start a chunked export; returns an opaque <em>handle</em>.</td></tr>
+    <tr><td><code>asyncExportContinue(handle)</code></td><td><code>int</code></td>
+      <td>Process one chunk; returns the cumulative number of rows done so far.</td></tr>
+    <tr><td><code>asyncExportEnd(handle)</code></td><td><code>ByteArray</code></td>
+      <td>Flush any remaining rows, finalise the file, return the bytes. Consumes the handle.</td></tr>
+    <tr><td><code>asyncExportCancel(handle)</code></td><td><code>void</code></td>
+      <td>Discard an in-progress export and release its state. Consumes the handle.</td></tr>
+  </tbody>
+</table>
+<p>
+  The handle returned by <code>asyncExportBegin</code> is a plain object carrying two read-only progress
+  fields you can bind a UI to:
+</p>
+<table>
+  <thead><tr><th>Handle field</th><th>Type</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>__total</code></td><td><code>int</code></td><td>Total number of rows to export.</td></tr>
+    <tr><td><code>__done</code></td><td><code>int</code></td><td>Rows processed so far (mirrors the return of <code>asyncExportContinue</code>).</td></tr>
+  </tbody>
+</table>
+<div class="note warn">
+  <span class="lbl">Handle lifecycle</span>
+  A handle is single-use: once passed to <code>asyncExportEnd</code> or <code>asyncExportCancel</code> it is
+  consumed and must not be reused. Always reach one of the two terminal calls (use <code>try/finally</code>
+  around the loop) so the native state is released.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="rows"><span class="n">4</span>Row sources &amp; field selectors</h2>
+<h3>Row sources</h3>
+<p>
+  <code>options.rows</code> is either an <code>Array</code> or an <code>XMLList</code>. When it is an
+  <code>Array</code>, each element may be:
+</p>
+<ul>
+  <li>an <code>XMLReadOnly</code> node (fastest — extracted with a zero-allocation path),</li>
+  <li>a mutable <code>XML</code> / E4X node, or</li>
+  <li>a plain object (fields read as public properties).</li>
+</ul>
+<p>
+  Pass the rows in whatever order you want them written — for a sorted/filtered grid, iterate the
+  <em>view</em> (e.g. via <code>ICollectionView.createCursor()</code>) into an <code>Array</code> so the file
+  reflects what the user sees.
+</p>
+
+<h3>Field selectors</h3>
+<p>
+  <code>options.fields</code> is an <code>Array</code> with one entry per column, in column order. Each entry
+  is a string that selects a value from the row, using the same mini-syntax as <code>XMLReadOnly.sortKeyed</code>:
+</p>
+<table>
+  <thead><tr><th>Selector</th><th>Selects</th></tr></thead>
+  <tbody>
+    <tr><td><code>""</code></td><td>the row's own simple content (the node/value itself).</td></tr>
+    <tr><td><code>"@name"</code></td><td>the attribute <code>name</code> (for XML/XMLReadOnly rows).</td></tr>
+    <tr><td><code>"name"</code></td><td>the child element <code>name</code>, or the property <code>name</code> for plain objects.</td></tr>
+    <tr><td><code>null</code> / <code>undefined</code></td><td>an always-empty cell (placeholder column).</td></tr>
+  </tbody>
+</table>
+<pre><code>// Three columns: an attribute, then two child elements / properties.
+var fields:Array = ["@id", "name", "amount"];</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="options"><span class="n">5</span>The options bag</h2>
+<p>
+  The variable, essential inputs &mdash; <code>rows</code>, <code>fields</code>, <code>header</code> &mdash; are
+  positional parameters. Everything else travels in the trailing <code>options</code> object, grouped below by
+  the format (or execution model) it affects and ignored elsewhere.
+</p>
+
+<h3>Positional parameters</h3>
+<table>
+  <thead><tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>rows</code></td><td>Array | XMLList</td><td class="def">required</td><td>Row source (see &sect;4).</td></tr>
+    <tr><td><code>fields</code></td><td>Array</td><td class="def">required</td><td>Per-column value selectors (see &sect;4).</td></tr>
+    <tr><td><code>header</code></td><td>XML</td><td class="def">null</td><td>xlsx grouped / multi-row header (see &sect;7); <code>null</code> (or CSV) &rarr; a flat header derived from <code>fields</code>.</td></tr>
+  </tbody>
+</table>
+
+<h3>options &mdash; common</h3>
+<table>
+  <thead><tr><th>Key</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>format</code></td><td>String</td><td class="def">"xlsx"</td><td>Output format: <code>"xlsx"</code> or <code>"csv"</code>.</td></tr>
+  </tbody>
+</table>
+
+<h3>xlsx only</h3>
+<table>
+  <thead><tr><th>Key</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>detectTypes</code></td><td>Boolean</td><td class="def">true</td><td>Auto-detect each column's type (text / number / date) from a sample. Set <code>false</code> to write every column as text. (<code>forceText</code> is CSV-only and has no effect here.)</td></tr>
+    <tr><td><code>detectDates</code></td><td>Boolean</td><td class="def">true</td><td>Within detection, treat a column as dates when every value matches <code>YYYY-MM-DD HH:MM:SS</code> (stored as Excel serials). Only when <code>detectTypes</code> is true.</td></tr>
+    <tr><td><code>typeSampleRows</code></td><td>int</td><td class="def">1000</td><td>Rows scanned to infer column types (<code>0</code> = all rows).</td></tr>
+    <tr><td><code>sheetName</code></td><td>String</td><td class="def">"Foglio1"</td><td>Worksheet name.</td></tr>
+    <tr><td><code>compression</code></td><td>int</td><td class="def">6</td><td>ZIP/deflate level, 0&ndash;9 (1 = fast/large, 9 = small/slow).</td></tr>
+    <tr><td><code>fontFamily</code></td><td>String</td><td class="def">"Calibri"</td><td>Global font.</td></tr>
+    <tr><td><code>fontSize</code></td><td>Number</td><td class="def">11</td><td>Global font size (points).</td></tr>
+    <tr><td><code>headerBackgroundColor</code></td><td>uint</td><td class="def">&mdash;</td><td>Header cell fill, <code>0xRRGGBB</code>.</td></tr>
+    <tr><td><code>headerForegroundColor</code></td><td>uint</td><td class="def">&mdash;</td><td>Header font colour, <code>0xRRGGBB</code>.</td></tr>
+    <tr><td><code>rowBackgroundColors</code></td><td>[uint, uint]</td><td class="def">&mdash;</td><td>Two colours for alternating data-row fill (populated cells only).</td></tr>
+  </tbody>
+</table>
+
+<h3>csv only</h3>
+<table>
+  <thead><tr><th>Key</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>separator</code></td><td>String</td><td class="def">";"</td><td>Column separator.</td></tr>
+    <tr><td><code>separatorHint</code></td><td>Boolean</td><td class="def">false</td><td>Prepend a <code>sep=&lt;separator&gt;</code> line so some spreadsheet apps adopt a non-standard separator.</td></tr>
+    <tr><td><code>forceText</code></td><td>Boolean</td><td class="def">false</td><td>Emit every data cell as the formula string <code>="&lt;value&gt;"</code> so it is imported verbatim as text (exact quoting in &sect;6). CSV-only.</td></tr>
+    <tr><td><code>compress</code></td><td>Boolean</td><td class="def">false</td><td>Wrap the CSV in a ZIP archive (one entry <code>&lt;sheetName&gt;.csv</code>).</td></tr>
+    <tr><td><code>compression</code></td><td>int</td><td class="def">6</td><td>Deflate level when <code>compress</code> is true.</td></tr>
+    <tr><td><code>sheetName</code></td><td>String</td><td class="def">"Foglio1"</td><td>Entry name inside the ZIP (when <code>compress</code>).</td></tr>
+  </tbody>
+</table>
+
+<h3>Asynchronous only</h3>
+<table>
+  <thead><tr><th>Key</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>minChunkSize</code></td><td>int</td><td class="def">100</td><td>Lower bound on the per-chunk row count. The chunk is <code>max(1% of total rows, minChunkSize)</code>.</td></tr>
+  </tbody>
+</table>
+<div class="note">
+  <span class="lbl">Default column titles from <code>fields</code></span>
+  When <code>header</code> is <code>null</code> (always, in CSV mode), the column titles are derived from
+  <code>fields</code> as a single flat header row (a leading <code>@</code> on attribute selectors is
+  stripped). Pass a grouped <code>header</code> (xlsx, &sect;7) to override it.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="formats"><span class="n">6</span>Output formats</h2>
+<h3>xlsx</h3>
+<p>
+  A real OOXML workbook (a ZIP of XML parts). The worksheet is written one row at a time straight into the
+  ZIP entry, with inline strings (no shared-string table), so peak memory stays flat regardless of row count.
+  Multi-row grouped headers, per-column alignment, fonts, fills and borders are all supported (see &sect;7).
+</p>
+<h3>Type auto-detection (xlsx)</h3>
+<p>
+  Each column is typed independently by scanning a sample of the rows (the first <code>typeSampleRows</code>,
+  default 1000; <code>0</code> scans all). A column becomes <strong>number</strong> or <strong>date</strong>
+  only if <em>every</em> non-empty sampled value matches; otherwise it stays <strong>text</strong>. A value
+  beyond the sample that no longer fits its column type is written as text for that single cell, so no data is
+  lost. Set <code>detectTypes:false</code> to make everything text (<code>forceText</code> is CSV-only).
+</p>
+<ul>
+  <li><strong>Number</strong> &mdash; an optional sign, digits, and at most one decimal separator
+    (<code>.</code> or <code>,</code>, always decimal, never a thousands separator); the integer part may be
+    omitted (<code>,332</code> &rarr; <code>0.332</code>). Exponents (<code>23456E1</code>), leading-zero
+    codes (<code>007</code>) and values over 15 significant digits stay text. Stored as a real number with
+    the <em>General</em> format &mdash; integers show no trailing separator and the decimal separator follows
+    Excel's locale.</li>
+  <li><strong>Date</strong> &mdash; the exact form <code>YYYY-MM-DD HH:MM:SS</code>, stored as an Excel serial
+    with a <code>yyyy-mm-dd hh:mm:ss</code> number format (sortable and filterable as a real date). Turn off
+    with <code>detectDates:false</code>.</li>
+  <li><strong>Text</strong> &mdash; everything else. Textual values that look numeric (codes such as
+    <code>23456E1</code>) would trigger Excel's &ldquo;number stored as text&rdquo; warning; the worksheet
+    suppresses it over the data area with an <code>&lt;ignoredErrors&gt;</code> block.</li>
+</ul>
+<h3>CSV</h3>
+<p>
+  UTF-8 with a BOM and CRLF line endings. There is no type detection in CSV &mdash; every value is written as
+  text; how each cell is quoted depends on <code>forceText</code>:
+</p>
+<ul>
+  <li><strong>Default</strong> (<code>forceText:false</code>) &mdash; RFC 4180 quoting: a field is wrapped in
+    <code>"&hellip;"</code> only when it contains the separator, a <code>"</code>, or a line break, with any
+    inner <code>"</code> doubled; otherwise it is written bare. A spreadsheet app may then still re-interpret a
+    bare value that looks like a number or date.</li>
+  <li><strong><code>forceText:true</code></strong> &mdash; every <em>data</em> cell is emitted as the formula
+    string <code>="&lt;value&gt;"</code>, which forces verbatim text import (leading zeros, number/date-looking
+    values, etc.). Because that formula is itself CSV-quoted, the literal output for a value <code>V</code> is
+    <code>"=""V"""</code>, and each <code>"</code> inside <code>V</code> becomes four. Header titles are
+    <em>not</em> wrapped &mdash; they stay plain.</li>
+</ul>
+<p>
+  <code>separatorHint</code> prepends a <code>sep=&lt;separator&gt;</code> line so some spreadsheet apps adopt a
+  non-standard separator. With <code>compress</code>, the CSV is wrapped in a single-entry ZIP archive
+  (<code>&lt;sheetName&gt;.csv</code>), streamed through the same deflate path as xlsx.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="headers"><span class="n">7</span>Headers &amp; styling (xlsx)</h2>
+<p>
+  With <code>header = null</code> (the default) xlsx writes a flat header row of field names, exactly like CSV.
+  For grouped, multi-row headers, pass the <code>header</code> parameter as a small XML descriptor:
+  <code>&lt;c&gt;</code> is a leaf column (must line up, in order, with <code>fields</code>) and
+  <code>&lt;g&gt;</code> is a group spanning its children.
+  The <code>t</code> attribute is the displayed title; <code>textAlign</code>
+  (<code>left</code>/<code>center</code>/<code>right</code>) sets the column alignment and is propagated to the
+  data cells of that column; <code>width</code> on a leaf sets its column width.
+</p>
+<pre><code>var header:XML =
+  &lt;h&gt;
+    &lt;c t="Region"/&gt;
+    &lt;g t="Sales"&gt;
+      &lt;c t="Q1" textAlign="right"/&gt;
+      &lt;c t="Q2" textAlign="right"/&gt;
+    &lt;/g&gt;
+  &lt;/h&gt;;
+
+var fields:Array = ["region", "q1", "q2"]; // one entry per &lt;c&gt; leaf, in order</code></pre>
+
+<figure>
+<svg viewBox="0 0 820 250" role="img" aria-labelledby="hdt hdd">
+  <title id="hdt">Grouped header mapping</title>
+  <desc id="hdd">The header XML on the left maps to a two-row worksheet header on the right, with the group cell spanning two columns and the standalone column spanning two rows.</desc>
+  <text class="s-ti" x="20" y="26">header XML</text>
+  <text class="s-ti" x="470" y="26">worksheet header</text>
+
+  <!-- xml tree -->
+  <g class="s-mono" font-size="12">
+    <text class="s-t" x="20" y="64">&lt;h&gt;</text>
+    <text class="s-t" x="44" y="92">&lt;c t="Region"/&gt;</text>
+    <text class="s-t" x="44" y="120">&lt;g t="Sales"&gt;</text>
+    <text class="s-t" x="68" y="148">&lt;c t="Q1"/&gt;</text>
+    <text class="s-t" x="68" y="176">&lt;c t="Q2"/&gt;</text>
+    <text class="s-t" x="44" y="204">&lt;/g&gt;</text>
+    <text class="s-t" x="20" y="232">&lt;/h&gt;</text>
+  </g>
+
+  <line class="s-arrow" x1="300" y1="120" x2="450" y2="120" marker-end="url(#ar)"/>
+  <defs>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" class="s-acc"/>
+    </marker>
+  </defs>
+
+  <!-- grid -->
+  <g>
+    <!-- Region spans 2 rows -->
+    <rect class="s-hi" x="470" y="60" width="110" height="84"/>
+    <text class="s-h" x="525" y="106" text-anchor="middle">Region</text>
+    <!-- Sales spans 2 cols, row 1 -->
+    <rect class="s-surf" x="580" y="60" width="220" height="42"/>
+    <text class="s-h" x="690" y="86" text-anchor="middle">Sales</text>
+    <!-- Q1 / Q2, row 2 -->
+    <rect class="s-box" x="580" y="102" width="110" height="42"/>
+    <text class="s-h" x="635" y="128" text-anchor="middle">Q1</text>
+    <rect class="s-box" x="690" y="102" width="110" height="42"/>
+    <text class="s-h" x="745" y="128" text-anchor="middle">Q2</text>
+    <!-- data row sketch -->
+    <rect class="s-box" x="470" y="144" width="110" height="34"/>
+    <rect class="s-box" x="580" y="144" width="110" height="34"/>
+    <rect class="s-box" x="690" y="144" width="110" height="34"/>
+    <text class="s-s" x="525" y="166" text-anchor="middle">North</text>
+    <text class="s-s" x="635" y="166" text-anchor="middle">120</text>
+    <text class="s-s" x="745" y="166" text-anchor="middle">98</text>
+  </g>
+  <text class="s-s" x="470" y="200">group cell &rarr; merged across its leaves; standalone leaf &rarr; merged down through the header rows</text>
+</svg>
+<figcaption>A <code>&lt;g&gt;</code> becomes a merged cell spanning its leaf columns; a top-level <code>&lt;c&gt;</code> is merged down through the header rows. Every header cell is bordered, including the covered parts of a merge.</figcaption>
+</figure>
+
+<p>
+  Colours are <code>0xRRGGBB</code> uints: <code>headerBackgroundColor</code> / <code>headerForegroundColor</code>
+  style the header cells, and <code>rowBackgroundColors:[even, odd]</code> paints alternating data rows
+  (populated cells only). A thin black border is drawn around every cell inside the populated area.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="sync"><span class="n">8</span>Synchronous export</h2>
+<p>
+  Build the options, call <code>syncExport</code>, and hand the bytes to whatever save mechanism your app
+  uses (<code>FileReference.save</code> shown here as a generic example):
+</p>
+<pre><code>import flash.net.FileReference;
+import flash.utils.ByteArray;
+
+var xport:Class = exportClass();
+
+// rows: an Array you collected from your data provider, in display order.
+var bytes:ByteArray = xport["syncExport"](
+    rows,                                  // row source, in display order
+    ["@id", "name", "amount"],             // fields
+    &lt;h&gt;
+      &lt;c t="ID"/&gt;
+      &lt;c t="Name"/&gt;
+      &lt;c t="Amount" textAlign="right"/&gt;
+    &lt;/h&gt;,                                 // header (null -&gt; flat header from fields)
+    {
+        format: "xlsx",
+        headerBackgroundColor: 0x4F81BD,
+        headerForegroundColor: 0xFFFFFF,
+        rowBackgroundColors:  [0xFFFFFF, 0xEEF3FA]
+    }
+);
+
+new FileReference().save(bytes, "export.xlsx");</code></pre>
+
+<p>A minimal CSV variant:</p>
+<pre><code>var csv:ByteArray = xport["syncExport"](
+    rows,
+    ["@id", "name", "amount"],
+    null,                                  // no header in CSV
+    { format: "csv", separator: ";", forceText: true }
+);
+new FileReference().save(csv, "export.csv");</code></pre>
+
+<div class="note warn">
+  <span class="lbl">When to prefer async</span>
+  <code>syncExport</code> runs to completion in a single call and blocks the runtime meanwhile. For large
+  data sets (tens of thousands of rows and up) this can freeze the UI for several seconds — use the chunked
+  API below so the player can repaint.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="async"><span class="n">9</span>Asynchronous (chunked) export</h2>
+<p>
+  The chunked flow splits the work across many short calls. You drive it from a loop that yields to the
+  runtime between calls — typically an <code>ENTER_FRAME</code> handler or a zero-delay <code>Timer</code> —
+  so the player gets a frame to repaint (and a progress bar to advance) between blocks.
+</p>
+
+<figure>
+<svg viewBox="0 0 820 210" role="img" aria-labelledby="aft afd">
+  <title id="aft">Asynchronous export flow</title>
+  <desc id="afd">Begin produces a handle; Continue is called repeatedly, each call separated by a frame yield, until all rows are done; then End returns the bytes.</desc>
+  <rect class="s-good" x="20" y="40" width="120" height="46" rx="6"/>
+  <text class="s-h" x="80" y="61" text-anchor="middle">asyncExportBegin</text>
+  <text class="s-s" x="80" y="77" text-anchor="middle">&rarr; handle</text>
+
+  <rect class="s-hi" x="200" y="40" width="150" height="46" rx="6"/>
+  <text class="s-h" x="275" y="61" text-anchor="middle">asyncExportContinue</text>
+  <text class="s-s" x="275" y="77" text-anchor="middle">one chunk &rarr; rows done</text>
+
+  <rect class="s-surf" x="200" y="130" width="150" height="40" rx="6"/>
+  <text class="s-s" x="275" y="155" text-anchor="middle">frame yield (repaint)</text>
+
+  <rect class="s-good" x="470" y="40" width="120" height="46" rx="6"/>
+  <text class="s-h" x="530" y="61" text-anchor="middle">asyncExportEnd</text>
+  <text class="s-s" x="530" y="77" text-anchor="middle">&rarr; ByteArray</text>
+
+  <line class="s-arrow" x1="140" y1="63" x2="198" y2="63" marker-end="url(#ar2)"/>
+  <line class="s-arrow" x1="350" y1="63" x2="468" y2="63" marker-end="url(#ar2)"/>
+  <text class="s-s" x="409" y="55" text-anchor="middle">when done == total</text>
+  <!-- loop -->
+  <path class="s-arrow" d="M275,86 L275,128" marker-end="url(#ar2)"/>
+  <path class="s-arrow" d="M200,150 C150,150 150,63 198,63" marker-end="url(#ar2)"/>
+  <text class="s-s" x="120" y="120" text-anchor="middle">while done &lt; total</text>
+  <defs>
+    <marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" class="s-acc"/>
+    </marker>
+  </defs>
+</svg>
+<figcaption>Each <code>asyncExportContinue</code> processes one chunk (1% of the rows by default, floored at <code>minChunkSize</code>) and returns rows-done; the loop ends with <code>asyncExportEnd</code>.</figcaption>
+</figure>
+
+<pre><code>import flash.events.Event;
+import flash.net.FileReference;
+import flash.utils.ByteArray;
+
+var xport:Class = exportClass();
+var handle:Object = xport["asyncExportBegin"](
+    rows,
+    ["@id", "name", "amount"],
+    &lt;h&gt;&lt;c t="ID"/&gt;&lt;c t="Name"/&gt;&lt;c t="Amount"/&gt;&lt;/h&gt;,
+    { format: "xlsx" }
+);
+var total:int = int(handle.__total);
+
+// `driver` is any DisplayObject on the stage. Weak listener — see Gotchas.
+driver.addEventListener(Event.ENTER_FRAME, onTick, false, 0, true);
+
+function onTick(e:Event):void {
+    var done:int = xport["asyncExportContinue"](handle);
+    progressBar.setProgress(done, total);          // update your UI
+    if (done &gt;= total) {
+        driver.removeEventListener(Event.ENTER_FRAME, onTick);
+        var bytes:ByteArray = xport["asyncExportEnd"](handle);
+        new FileReference().save(bytes, "export.xlsx");
+    }
+}</code></pre>
+
+<p>To abort early (e.g. a Cancel button), stop the loop and release the state:</p>
+<pre><code>driver.removeEventListener(Event.ENTER_FRAME, onTick);
+xport["asyncExportCancel"](handle);</code></pre>
+
+<div class="note">
+  <span class="lbl">Throughput vs. smoothness</span>
+  The default chunk is 1% of the rows, so the export yields ~100 times — smooth progress at a small overhead
+  (one frame per chunk). Raise <code>minChunkSize</code>, or process several chunks per frame, to trade
+  progress granularity for speed.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="perf"><span class="n">10</span>Performance &amp; memory</h2>
+<p>
+  The writer is a hand-rolled ZIP container (local headers + central directory) whose entry payload is
+  produced with a raw <code>deflate</code> stream. Rows are serialised and compressed incrementally into a
+  small fixed scratch buffer and appended to the output, so peak memory is governed by the output size, not
+  by an intermediate full-document buffer — the export scales to ~1M rows where an all-in-RAM writer would
+  not.
+</p>
+<p>
+  In the asynchronous path the per-export state is kept across calls on the Rust side; each
+  <code>asyncExportContinue</code> does work proportional only to the rows in <em>that</em> chunk, so total
+  cost stays linear in the number of rows. Cell extraction has a zero-allocation fast path for
+  <code>XMLReadOnly</code> rows, which is the cheapest source for large data sets.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="gotchas"><span class="n">11</span>Notes &amp; gotchas</h2>
+<ul>
+  <li>
+    <strong>Always finish or cancel.</strong> The async handle holds onto the row source until
+    <code>asyncExportEnd</code> / <code>asyncExportCancel</code> runs. Wrap the loop so one of them is always
+    reached, even on error.
+  </li>
+  <li>
+    <strong>Weak listeners for the driver.</strong> If you drive the loop from a listener (or a closure)
+    that captures the surrounding scope, register it with <code>useWeakReference = true</code> — or remove it
+    in a terminal branch. A strong listener on a long-lived object keeps the captured scope (and, with it,
+    the rows array) alive after the export is done. In ActionScript a closure captures its <em>whole</em>
+    enclosing activation, not just the variables it names.
+  </li>
+  <li>
+    <strong>Row order is yours.</strong> Rows are written exactly in the order you pass them. To honour the
+    on-screen sort/filter of a collection, iterate its view cursor into the array rather than reading the
+    backing list.
+  </li>
+  <li>
+    <strong>Type detection is per column and conservative.</strong> A column is numeric or a date only when
+    <em>every</em> non-empty sampled value fits; one non-matching value within the first
+    <code>typeSampleRows</code> keeps the whole column textual. Numbers accept a comma or dot decimal and an
+    omitted integer part (<code>,332</code>) but reject thousands separators, exponents and leading-zero
+    codes. Use <code>detectTypes:false</code> to force plain text (xlsx); <code>forceText</code> is CSV-only.
+  </li>
+  <li>
+    <strong>Excel has no &ldquo;typed columns&rdquo;.</strong> A cell's type follows its stored value, not a
+    column declaration: editing a numeric cell to non-numeric content just turns it into text (dropped from
+    sums), with no error. The green triangle is only Excel's heuristic for text that looks numeric &mdash;
+    suppressed here by design &mdash; not a type-integrity check.
+  </li>
+  <li>
+    <strong>Grid cap.</strong> The xlsx grid is limited to 1,048,575 data rows; extra rows are dropped.
+  </li>
+</ul>
+
+<div class="footer">
+  ExportUtils &middot; Ruffle AVM2 builtin &middot; native module <code>core/src/avm2/globals/export_utils.rs</code>,
+  AS3 surface <code>ExportUtils.as</code>. Single self-contained document.
+</div>
+
+</div>
+</body>
+</html>

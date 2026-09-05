@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="en" data-doc="tile-memory-allocator">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tilemalloc — design &amp; internals</title>
+<style>
+  :root{
+    --bg:#ffffff; --surface:#f6f6f4; --surface2:#efeee9;
+    --text:#1d1d1b; --text2:#5f5e5a;
+    --border:#d3d1c7; --border2:#b4b2a9;
+    --accent:#534ab7; --accent-soft:#7f77dd;
+    --good:#1d9e75; --warn:#d85a30; --info:#378add;
+    --code-bg:#f1efe8;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#1a1a18; --surface:#242420; --surface2:#2c2c28;
+      --text:#ecece9; --text2:#b4b2a9;
+      --border:#444441; --border2:#5f5e5a;
+      --accent:#afa9ec; --accent-soft:#7f77dd;
+      --good:#5dcaa5; --warn:#f0997b; --info:#85b7eb;
+      --code-bg:#26261f;
+    }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:16px; line-height:1.65;
+  }
+  .wrap{max-width:900px; margin:0 auto; padding:48px 28px 96px}
+  header.doc{border-bottom:1px solid var(--border); padding-bottom:24px; margin-bottom:8px}
+  header.doc h1{font-size:30px; margin:0 0 6px; letter-spacing:-.01em}
+  header.doc .sub{color:var(--text2); font-size:15px}
+  header.doc .meta{color:var(--text2); font-size:13px; margin-top:14px}
+  header.doc .meta code{font-size:12px}
+  h2{font-size:23px; margin:52px 0 4px; letter-spacing:-.01em; scroll-margin-top:20px}
+  h2 .n{color:var(--accent); font-variant-numeric:tabular-nums; margin-right:10px}
+  h3{font-size:17px; margin:28px 0 4px}
+  p{margin:12px 0}
+  a{color:var(--accent)}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.88em;
+    background:var(--code-bg); padding:.12em .4em; border-radius:4px}
+  pre{background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+    padding:14px 16px; overflow:auto; font-size:13px; line-height:1.5}
+  pre code{background:none; padding:0}
+  .lead{font-size:18px; color:var(--text)}
+  ul,ol{padding-left:22px} li{margin:5px 0}
+  nav.toc{background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:18px 22px; margin:28px 0 8px}
+  nav.toc strong{display:block; font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--text2); margin-bottom:8px}
+  nav.toc ol{margin:0; columns:2; column-gap:32px}
+  nav.toc a{text-decoration:none; color:var(--text)}
+  nav.toc a:hover{color:var(--accent)}
+  .note{border-left:3px solid var(--accent); background:var(--surface);
+    padding:12px 16px; border-radius:0 8px 8px 0; margin:18px 0; font-size:15px}
+  .note.good{border-color:var(--good)}
+  .note.warn{border-color:var(--warn)}
+  .note .lbl{font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--text2); display:block; margin-bottom:2px}
+  figure{margin:24px 0; background:var(--surface); border:1px solid var(--border);
+    border-radius:10px; padding:20px}
+  figure svg{display:block; width:100%; height:auto}
+  figcaption{color:var(--text2); font-size:13px; margin-top:12px; text-align:center}
+  table{width:100%; border-collapse:collapse; margin:20px 0; font-size:14px}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:top}
+  th{font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--text2);
+    border-bottom:2px solid var(--border2)}
+  td.num,th.num{text-align:right; font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,monospace}
+  tr.sum td{font-weight:600; border-top:2px solid var(--border2); background:var(--surface)}
+  .neg{color:var(--warn); font-weight:600}
+  .pos{color:var(--good); font-weight:600}
+  td code{white-space:nowrap}
+  svg text{font-family:ui-sans-serif,system-ui,sans-serif}
+  .s-ti{font-weight:600; fill:var(--text); font-size:14px}
+  .s-h{font-weight:600; fill:var(--text); font-size:12px}
+  .s-t{fill:var(--text); font-size:12px}
+  .s-s{fill:var(--text2); font-size:10px}
+  .s-mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+  .s-box{fill:var(--bg); stroke:var(--border2); stroke-width:1.5}
+  .s-surf{fill:var(--surface2); stroke:var(--border2); stroke-width:1.2}
+  .s-hi{fill:var(--accent); fill-opacity:.14; stroke:var(--accent); stroke-width:1.5}
+  .s-good{fill:var(--good); fill-opacity:.16; stroke:var(--good); stroke-width:1.5}
+  .s-warn{fill:var(--warn); fill-opacity:.16; stroke:var(--warn); stroke-width:1.5}
+  .s-line{stroke:var(--border2); stroke-width:1.5; fill:none}
+  .s-arrow{stroke:var(--accent); stroke-width:1.6; fill:none}
+  .s-acc{fill:var(--accent)} .s-good-f{fill:var(--good)} .s-warn-f{fill:var(--warn)}
+  .footer{margin-top:64px; padding-top:20px; border-top:1px solid var(--border);
+    color:var(--text2); font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <h1>Tilemalloc</h1>
+  <div class="sub">A size-class allocator with intrusive free lists for long-running, small-allocation-heavy WASM workloads.</div>
+  <div class="meta">
+    Ruffle · global allocator (wasm32) &nbsp;·&nbsp; branch <code>tile-memory-allocator</code> &nbsp;·&nbsp;
+    last updated 2026-06-21 &nbsp;·&nbsp; single self-contained file (every diagram is inline SVG, no external dependencies).
+  </div>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#motivation">Motivation</a></li>
+    <li><a href="#model">The size-class model</a></li>
+    <li><a href="#allocfree">alloc &amp; dealloc — O(1)</a></li>
+    <li><a href="#extents">Extents &amp; the bump carve</a></li>
+    <li><a href="#realloc">realloc</a></li>
+    <li><a href="#trim">trim — reclaiming empty extents</a></li>
+    <li><a href="#diagnostics">Diagnostics</a></li>
+    <li><a href="#stats">Stats output &amp; tuning</a></li>
+    <li><a href="#system">System memory introspection</a></li>
+    <li><a href="#wasm64">wasm64 support</a></li>
+    <li><a href="#impact">Measured impact</a></li>
+    <li><a href="#scope">Limitations &amp; PR scope</a></li>
+    <li><a href="#appendix">Appendix — files &amp; types</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="motivation"><span class="n">1</span>Motivation</h2>
+<p class="lead">
+  Enterprise ActionScript&nbsp;3 applications that pour large XML documents into data grids are the worst case
+  for a general-purpose allocator. A grid bound to an E4X document materialises hundreds of thousands of tiny,
+  short-lived heap objects per load (E4X nodes, item renderers, binding watchers, event structures). On
+  <code>wasm32-unknown-unknown</code> Ruffle ships dlmalloc, whose free-list traversal and coalescing cost
+  grows with the live set — exactly the wrong cost curve for this access pattern.
+</p>
+<p>
+  Tilemalloc collapses that cost to <strong>O(1) push/pop</strong> on per-class intrusive free lists, and
+  <strong>never coalesces on free</strong>. AS3 GC cycles otherwise compound the problem: each cycle sweeps and
+  frees a large population of small objects, and every free pays the coalescing tax. With tilemalloc, tiles
+  freed by an object's destruction stay carved at their size, ready to be popped by the next allocation of the
+  same shape — a construct/destruct loop settles into reuse with no extra <code>memory.grow()</code> past the
+  initial extent fills. It installs as the binary's <code>#[global_allocator]</code>; over-sized or
+  over-aligned requests fall through to the system allocator transparently. There is no AS3 surface.
+</p>
+<div class="note good">
+  <span class="lbl">The headline</span>
+  A 250,000-row XML document that <strong>never finishes loading under dlmalloc (aborted after 5 minutes)</strong>
+  loads in <strong>~40 seconds</strong> with tilemalloc — this changes which documents the player can open at
+  all, not just how fast. The 100k-row case roughly halves (~30&nbsp;s → ~15&nbsp;s on a fresh heap). See §11.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="model"><span class="n">2</span>The size-class model</h2>
+<p>
+  The allocator is configured (in <code>config.rs</code>) as a list of <strong>size classes</strong>, each a
+  <code>(size_bytes, extent_mb)</code> pair. For every request, <code>pick_class</code> walks the
+  ascending-ordered list once and picks the smallest class whose <code>size_bytes ≥ Layout::size</code>
+  <em>and</em> <code>tile_align ≥ Layout::align</code>; anything that fits no class returns <code>None</code>
+  and takes the system fallback.
+</p>
+<ul>
+  <li><code>tile_align</code> is <strong>auto-derived</strong>, not a config knob: the greatest power-of-two
+    divisor of <code>size_bytes</code> (<code>size_bytes &amp; size_bytes.wrapping_neg()</code>, its lowest set
+    bit). For pow-2 sizes it equals the size; for 24/48/96 it lands on 8/16/32 — enough for the vast majority of
+    Rust types (<code>align ≤ 8</code>).</li>
+  <li><code>size_bytes ≥ 4</code> is required: a free tile reuses its first pointer-sized bytes for the
+    intrusive <code>next</code> link (4&nbsp;B on wasm32), so classes of 1–3 bytes are not representable and the
+    config validator rejects them.</li>
+</ul>
+<p>The shipped default covers the 8–256&nbsp;byte range — where the churn concentrates — at sub-power-of-two granularity:</p>
+<table>
+  <thead><tr><th>Range</th><th>Step</th><th>Classes</th></tr></thead>
+  <tbody>
+    <tr><td>8 → 64 B</td><td class="num">8</td><td><code>8, 16, 24, 32, 40, 48, 56, 64</code></td></tr>
+    <tr><td>80 → 256 B</td><td class="num">16</td><td><code>80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256</code></td></tr>
+  </tbody>
+</table>
+<p>
+  That is 20 classes, with 8&nbsp;MiB reserved per extent — ~160&nbsp;MiB of pool address space if every class
+  is touched. Anything above 256&nbsp;B falls back to dlmalloc.
+</p>
+
+<figure>
+<svg viewBox="0 0 820 250" role="img" aria-labelledby="d1t d1d">
+  <title id="d1t">Routing an allocation</title>
+  <desc id="d1d">pick_class routes a request to the smallest fitting size class, or to the system fallback when nothing fits.</desc>
+  <rect class="s-box" x="20" y="40" width="150" height="48" rx="6"/>
+  <text class="s-t" x="95" y="60" text-anchor="middle">alloc(Layout)</text>
+  <text class="s-s" x="95" y="78" text-anchor="middle">size + align</text>
+  <path class="s-arrow" d="M 170 64 L 215 64" marker-end="url(#a1)"/>
+  <defs><marker id="a1" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="var(--accent)"/></marker></defs>
+  <rect class="s-surf" x="215" y="40" width="150" height="48" rx="6"/>
+  <text class="s-h" x="290" y="60" text-anchor="middle">pick_class</text>
+  <text class="s-s" x="290" y="78" text-anchor="middle">smallest fitting</text>
+
+  <g class="s-mono">
+    <rect class="s-hi" x="430" y="24" width="360" height="26" rx="4"/>
+    <text class="s-t" x="440" y="41" font-size="11">class 8  → free list · bump · extents</text>
+    <rect class="s-box" x="430" y="54" width="360" height="24" rx="4"/>
+    <text class="s-t" x="440" y="70" font-size="11">class 16 → free list · bump · extents</text>
+    <rect class="s-box" x="430" y="82" width="360" height="24" rx="4"/>
+    <text class="s-s" x="440" y="98" font-size="11">… 20 classes, 8–256 B …</text>
+    <rect class="s-box" x="430" y="110" width="360" height="24" rx="4"/>
+    <text class="s-t" x="440" y="126" font-size="11">class 256 → free list · bump · extents</text>
+  </g>
+  <path class="s-arrow" d="M 365 64 C 395 64, 405 70, 428 70" marker-end="url(#a1)"/>
+
+  <rect class="s-warn" x="215" y="160" width="360" height="44" rx="6"/>
+  <text class="s-t" x="395" y="180" text-anchor="middle">system fallback (dlmalloc)</text>
+  <text class="s-s" x="395" y="196" text-anchor="middle">size &gt; largest class, or over-aligned</text>
+  <path class="s-arrow" d="M 290 88 L 290 158" marker-end="url(#a1)" stroke-dasharray="4 4"/>
+</svg>
+<figcaption>Each class owns an intrusive free list, a bump cursor and its extents; the long tail of rare large allocations goes to dlmalloc.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="allocfree"><span class="n">3</span>alloc &amp; dealloc — O(1)</h2>
+<p>
+  Within a class, <strong>alloc</strong> is a three-step fast path and <strong>dealloc</strong> is a single
+  push — no list walk, no coalescing search, no size search, ever.
+</p>
+<ol>
+  <li><strong>Free list non-empty</strong> → pop the head. This recycles a recently-freed tile, likely still
+    hot in cache.</li>
+  <li><strong>Else bump range available</strong> (<code>bump_ptr &lt; bump_end</code>) → carve one tile off the
+    front and advance <code>bump_ptr += tile_size</code>.</li>
+  <li><strong>Else</strong> → <code>add_extent</code> to install a fresh bump range, then retry step&nbsp;2.</li>
+</ol>
+<p>
+  <strong>dealloc</strong> pushes the tile back onto the free-list head and returns. Tiles enter the free list
+  <em>exclusively</em> through dealloc; fresh tiles are handed out by the bump pointer.
+</p>
+
+<figure>
+<svg viewBox="0 0 820 200" role="img" aria-labelledby="d2t d2d">
+  <title id="d2t">The alloc fast path</title>
+  <desc id="d2d">alloc tries the free list, then the bump range, then adds an extent and retries.</desc>
+  <rect class="s-box" x="20" y="80" width="120" height="44" rx="6"/>
+  <text class="s-t" x="80" y="106" text-anchor="middle">class_alloc</text>
+  <path class="s-arrow" d="M 140 102 L 185 102" marker-end="url(#a2)"/>
+  <defs><marker id="a2" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="var(--accent)"/></marker></defs>
+
+  <rect class="s-good" x="185" y="80" width="160" height="44" rx="6"/>
+  <text class="s-t" x="265" y="100" text-anchor="middle">free list non-empty?</text>
+  <text class="s-good-f" x="265" y="116" text-anchor="middle" font-size="11">pop head — O(1)</text>
+
+  <path class="s-arrow" d="M 345 102 L 385 102" marker-end="url(#a2)"/>
+  <text class="s-s" x="365" y="95" text-anchor="middle">no</text>
+  <rect class="s-good" x="385" y="80" width="160" height="44" rx="6"/>
+  <text class="s-t" x="465" y="100" text-anchor="middle">bump &lt; end?</text>
+  <text class="s-good-f" x="465" y="116" text-anchor="middle" font-size="11">carve tile — O(1)</text>
+
+  <path class="s-arrow" d="M 545 102 L 585 102" marker-end="url(#a2)"/>
+  <text class="s-s" x="565" y="95" text-anchor="middle">no</text>
+  <rect class="s-box" x="585" y="80" width="200" height="44" rx="6"/>
+  <text class="s-t" x="685" y="100" text-anchor="middle">add_extent</text>
+  <text class="s-s" x="685" y="116" text-anchor="middle">(rare) then retry the carve</text>
+  <path class="s-arrow" d="M 685 80 C 685 40, 465 40, 465 78" marker-end="url(#a2)" stroke-dasharray="4 4"/>
+  <text class="s-s" x="575" y="34">retry</text>
+</svg>
+<figcaption>Steps 1–2 are the steady state (pure O(1)); step 3 is the rare, amortized extent install.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="extents"><span class="n">4</span>Extents &amp; the bump carve</h2>
+<p>
+  Capacity is added one extent at a time. An extent is a contiguous region of ~<code>extent_mb&nbsp;MiB</code>
+  from the system allocator. Rather than eagerly chaining every tile of a fresh extent onto the free list, each
+  class keeps a <strong>bump range</strong> <code>[bump_ptr, bump_end)</code> into the current extent and carves
+  tiles lazily as it advances. The invariant <code>extent_total = tile_size × tiles_per_extent</code> is exact,
+  so <code>bump_ptr &lt; bump_end</code> is a sufficient check that a whole tile fits before a carve. Each extent
+  is recorded as <code>ExtentRecord { ptr, total_bytes }</code> for stats and as the anchor <code>trim</code>
+  uses.
+</p>
+<div class="note">
+  <span class="lbl">Why bump carve (not an eager free-list build)</span>
+  An eager build writes a <code>next</code> pointer into every tile up front — for the 8-byte class with an
+  8&nbsp;MiB extent that is <strong>1,048,576 sequential stores</strong> at the first allocation, each touching
+  a fresh WASM linear-memory page, paid as a visible stall. The bump carve replaces that with two pointer
+  stores (<code>bump_ptr</code>, <code>bump_end</code>) and amortises each tile's page touch across the
+  subsequent allocs. Empirically this reclaimed <strong>~2–3&nbsp;s of a ~15&nbsp;s boot</strong>.
+</div>
+
+<figure>
+<svg viewBox="0 0 820 200" role="img" aria-labelledby="d3t d3d">
+  <title id="d3t">One extent: bump carve and free list</title>
+  <desc id="d3d">An extent is carved lazily by the bump pointer; freed tiles return to the intrusive free list.</desc>
+  <text class="s-s" x="20" y="34">extent (extent_mb × 1 MiB, contiguous)</text>
+  <rect class="s-surf" x="20" y="42" width="780" height="52" rx="6"/>
+  <g>
+    <rect class="s-box" x="28" y="50" width="40" height="36" rx="3"/>
+    <rect class="s-box" x="72" y="50" width="40" height="36" rx="3"/>
+    <rect class="s-good" x="116" y="50" width="40" height="36" rx="3"/>
+    <rect class="s-box" x="160" y="50" width="40" height="36" rx="3"/>
+    <text class="s-s" x="112" y="108" text-anchor="middle">carved (handed out / freed)</text>
+  </g>
+  <line x1="210" y1="42" x2="210" y2="94" stroke="var(--accent)" stroke-width="2"/>
+  <text class="s-acc" x="214" y="36" font-size="11">bump_ptr</text>
+  <text class="s-s" x="500" y="72" text-anchor="middle">uncarved — no writes yet</text>
+  <line x1="788" y1="42" x2="788" y2="94" stroke="var(--border2)" stroke-width="2"/>
+  <text class="s-s" x="788" y="36" text-anchor="end">bump_end</text>
+
+  <rect class="s-good" x="116" y="130" width="40" height="30" rx="3"/>
+  <text class="s-good-f s-s" x="136" y="176" text-anchor="middle">freed</text>
+  <path class="s-arrow" d="M 136 130 C 136 110, 136 100, 136 90" marker-end="url(#a3)"/>
+  <defs><marker id="a3" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="var(--accent)"/></marker></defs>
+  <text class="s-s" x="300" y="150">dealloc → push onto the per-class free list (the first 4 B hold the <tspan class="s-mono">next</tspan> link)</text>
+</svg>
+<figcaption>The bump pointer carves forward; freed tiles chain through their own first bytes — no separate metadata.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="realloc"><span class="n">5</span>realloc</h2>
+<p>
+  The default <code>GlobalAlloc::realloc</code> always does <code>alloc(new) + memcpy + dealloc(old)</code>. That
+  holds two tiles live at once and pressures the source class's free list — a driver of peak-transient
+  overshoot that can force extra extents under sustained reallocation (think <code>Vec::push</code> growth
+  loops).
+</p>
+<p>
+  Tilemalloc overrides it with an <strong>in-place fast path</strong>: when the new size still maps to the same
+  size class as the old <code>layout.size()</code>, the existing tile is already big enough, so it returns the
+  same pointer unchanged — zero alloc, zero copy, zero dealloc, and no transient where two tiles are
+  simultaneously alive in the same class. Only a genuine <strong>cross-class</strong> transition falls back to
+  the standard alloc+copy+dealloc sequence (and is counted — see §7).
+</p>
+
+<!-- ============================================================ -->
+<h2 id="trim"><span class="n">6</span>trim — reclaiming empty extents</h2>
+<p>
+  The steady state is deliberately <strong>grow-only</strong>: extents are never returned, so reuse is free. But
+  a <em>one-off spike</em> — millions of short-lived objects in one class faster than the GC reclaims them —
+  would otherwise strand its extents forever, and WASM linear memory never shrinks. <code>trim</code> is the
+  escape hatch.
+</p>
+<p>
+  <code>trim_empty_extents</code> runs only when called and is <strong>allocation-free</strong> (it executes
+  <em>as</em> the global allocator, so it must not re-enter itself). Per class it:
+</p>
+<ol>
+  <li>sorts the class's extents by address in place (zero allocation);</li>
+  <li>sweeps the free list, bucketing each free tile to its owning extent via a binary search
+    (<code>partition_point</code>), counting tiles per extent;</li>
+  <li><code>System::dealloc</code>s every extent whose tiles are <em>all</em> free
+    (<code>free_count == tiles_per_extent</code>) — <strong>never the current bump extent</strong>;</li>
+  <li>rebuilds the free list from the kept buckets plus any orphan tiles.</li>
+</ol>
+<p>
+  Two triggers: an <strong>automatic last-resort retry</strong> inside the fallback path (if a system alloc
+  would OOM, <code>trim</code> runs once and the alloc is retried — trim is alloc-free, so no recursion), and an
+  explicit <code>TileAllocator::trim()</code>, re-exported to JS as <code>tilemallocTrim</code> for a
+  memory-pressure or post-GC hook.
+</p>
+
+<figure>
+<svg viewBox="0 0 820 190" role="img" aria-labelledby="d5t d5d">
+  <title id="d5t">trim reclaims fully-empty extents</title>
+  <desc id="d5d">Extents with any live tile are kept; a fully-free extent is returned to the system; the bump extent is always kept.</desc>
+  <g>
+    <text class="s-s" x="130" y="34" text-anchor="middle">extent A</text>
+    <rect class="s-box" x="30" y="44" width="200" height="50" rx="6"/>
+    <rect class="s-good" x="40" y="54" width="28" height="30" rx="2"/>
+    <rect class="s-box" x="72" y="54" width="28" height="30" rx="2"/>
+    <rect class="s-good" x="104" y="54" width="28" height="30" rx="2"/>
+    <text class="s-s" x="130" y="110" text-anchor="middle">some tiles alive → keep</text>
+  </g>
+  <g>
+    <text class="s-s" x="410" y="34" text-anchor="middle">extent B</text>
+    <rect class="s-warn" x="310" y="44" width="200" height="50" rx="6"/>
+    <rect class="s-box" x="320" y="54" width="28" height="30" rx="2"/>
+    <rect class="s-box" x="352" y="54" width="28" height="30" rx="2"/>
+    <rect class="s-box" x="384" y="54" width="28" height="30" rx="2"/>
+    <text class="s-warn-f" x="410" y="110" text-anchor="middle">all free → System::dealloc</text>
+  </g>
+  <g>
+    <text class="s-s" x="690" y="34" text-anchor="middle">extent C (bump)</text>
+    <rect class="s-box" x="590" y="44" width="200" height="50" rx="6" stroke-dasharray="5 4"/>
+    <rect class="s-good" x="600" y="54" width="28" height="30" rx="2"/>
+    <text class="s-s" x="690" y="110" text-anchor="middle">current bump → always keep</text>
+  </g>
+  <path class="s-arrow" stroke="var(--warn)" d="M 410 120 L 410 160" marker-end="url(#a5)"/>
+  <defs><marker id="a5" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="var(--warn)"/></marker></defs>
+  <text class="s-warn-f" x="410" y="176" text-anchor="middle">returned to dlmalloc — any class or the fallback can reuse it</text>
+</svg>
+<figcaption>O(free tiles · log extents), on demand only. After a spike's garbage is collected, its dedicated extents are 100% free and reclaimed.</figcaption>
+</figure>
+
+<div class="note good">
+  <span class="lbl">Validated in the field</span>
+  After a 250k-row grid sort produced a transient spike, <code>tilemallocTrim()</code> released
+  <strong>~2&nbsp;GB</strong>. No forced collection is needed first: the spike's objects are gc-arena managed,
+  and gc-arena collects automatically every frame once the synchronous call returns — so by the time
+  <code>trim</code> runs (a few frames later) the spike's extents are already empty.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="diagnostics"><span class="n">7</span>Diagnostics</h2>
+<p>
+  The pool carries <strong>nine built-in instruments</strong>. They are a permanent part of the allocator —
+  what makes it tunable — with negligible overhead (1–3 ops per alloc/dealloc; the realloc counters touch only
+  the slow path) and ~3–5&nbsp;KB of state for the default config. The three <em>histograms</em> are gated by
+  the build-time constant <code>config::ENABLE_HISTOGRAMS</code> (default <code>false</code>): when off, LLVM
+  dead-code-eliminates their hot-path updates and the JSON omits them. The other six scalar instruments are
+  always on.
+</p>
+<table>
+  <thead><tr><th>Instrument</th><th>What it measures</th><th>Kind</th></tr></thead>
+  <tbody>
+    <tr><td>Waste tracking</td><td>live internal fragmentation per class (<code>tile_size − requested</code>); invariant <code>requested + wasted == alive × tile_size</code>, surfaced as <code>waste_pct</code></td><td>live</td></tr>
+    <tr><td>Peak alive tiles</td><td>high-water mark per class — if <code>peak ≤ tiles_per_extent</code>, one extent always sufficed</td><td>peak</td></tr>
+    <tr><td>Pool utilization %</td><td>derived: <code>alive × tile_size / extent_bytes</code> — low ⇒ <code>extent_mb</code> oversized</td><td>derived</td></tr>
+    <tr><td>In-place realloc count</td><td>realloc fast-path hits (no alloc/copy/dealloc)</td><td>lifetime</td></tr>
+    <tr><td>Inbound realloc (grow/shrink)</td><td>cross-class buffers arriving in a class, split by direction</td><td>lifetime</td></tr>
+    <tr><td>Outbound realloc (grow/shrink)</td><td>cross-class buffers leaving a class, split by direction</td><td>lifetime</td></tr>
+    <tr><td>Cross-class realloc total</td><td>global volume of alloc+copy+dealloc reallocs</td><td>lifetime</td></tr>
+    <tr><td>Size histogram <span style="color:var(--text2)">(gated)</span></td><td>request-size distribution <em>within</em> each class — the richest signal for splitting a class</td><td>live</td></tr>
+    <tr><td>Align histogram + fallback histogram <span style="color:var(--text2)">(gated)</span></td><td>per-class alignment distribution; fallback request-size buckets (candidates for new large classes)</td><td>live</td></tr>
+  </tbody>
+</table>
+<p>
+  <strong>Live vs lifetime.</strong> Live counters (waste, requested, histograms) are incremented at alloc and
+  <em>decremented</em> at dealloc using the <code>Layout</code> Rust guarantees is identical at both ends, so a
+  diff of two snapshots reports exactly how the pool's state changed in between — no heuristics. Lifetime
+  counters (alloc, dealloc, extents added/released, all realloc counters) only ever rise; they measure work
+  done. <code>peak_alive_tiles</code> is a high-water mark.
+</p>
+<div class="note">
+  <span class="lbl">Mass-balance identity</span>
+  Splitting inbound/outbound by direction is not cosmetic: across all classes,
+  <code>Σinbound − Σoutbound</code> equals the <strong>net buffer flow between the pool and the fallback</strong>
+  (positive = the pool drains the fallback via shrinks; negative = it bleeds into the fallback via grows). The
+  gaps <code>cross − Σinbound</code> and <code>cross − Σoutbound</code> isolate reallocs whose
+  destination/source was the fallback. Edge asymmetries are free self-checks — the smallest class can never
+  receive an inbound grow, so a non-zero there is a dispatch bug.
+</div>
+<div class="note">
+  <span class="lbl">Correctness note — u64 fallback counters</span>
+  The fallback byte counters (<code>fallback_bytes_alloc</code>/<code>dealloc</code>) are <code>u64</code>, not
+  <code>usize</code>. They are cumulative-over-lifetime, and on wasm32 a 32-bit <code>usize</code> would wrap
+  past 4&nbsp;GiB of accumulated fallback traffic — minutes of sustained churn. If one of the pair wrapped
+  before the other, <code>bytes_alive = saturating_sub(…)</code> would collapse to 0 (or spike) and snap back,
+  producing periodic minute-scale oscillation in the snapshot. <code>u64</code> removes the wrap for all
+  practical purposes.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="stats"><span class="n">8</span>Stats output &amp; tuning</h2>
+<p>
+  <code>TileAllocator::snapshot_stats()</code> copies a handful of <code>usize</code>s per class into a plain
+  stats struct, rendered two ways. Both return plain <code>String</code>s and are auto-installed on
+  <code>window</code> at module start (via wasm-bindgen), so they are callable straight from the DevTools
+  console with no host wiring — the caller chooses the sink (console, clipboard, side-by-side diff). There is no
+  AS3 surface.
+</p>
+<pre><code>window.tilemallocTable()   // single-line, human-diffable snapshot
+window.tilemallocStats()   // compact JSON, the stable machine-readable schema
+window.tilemallocTrim()    // reclaim empty extents; returns bytes released</code></pre>
+<p>The single-line table is the one to reach for when eyeballing two snapshots:</p>
+<pre><code>[{class=8 free=63391 alive=985185 ext=1 added=1 alloc=1123812 dealloc=138627 peak=985300
+  live_mb=7.52 util_pct=92.5 waste_pct=0.0} …
+ {fallback alloc=190934 dealloc=134793 alive_mb=144.66}
+ {totals pool_mb=192.00 tile_live_mb=80.74 live_tot_mb=225.40 waste_mb=6.8 waste_pct=8.4
+  realloc_inplace=12345 realloc_inbound_grow=54 realloc_inbound_shrink=35
+  realloc_outbound_grow=42 realloc_outbound_shrink=35 realloc_cross=678}]</code></pre>
+<p>
+  <code>tilemallocStats()</code> emits the full JSON schema (per-class records + fallback + totals; histograms
+  included only when <code>ENABLE_HISTOGRAMS</code> is on). The class order matches <code>TILE_CONFIG</code>;
+  all values are non-negative integers.
+</p>
+
+<h3>Reading the stats to choose the configuration</h3>
+<p>A practical loop for tuning <code>TILE_CONFIG</code> to a workload:</p>
+<table>
+  <thead><tr><th>Symptom in the snapshot</th><th>Reading</th><th>Action</th></tr></thead>
+  <tbody>
+    <tr><td><code>extents_added</code> keeps climbing for a class</td><td>working set exceeds one extent</td><td>raise that class's <code>extent_mb</code></td></tr>
+    <tr><td><code>util_pct</code> low (e.g. &lt; 30%)</td><td>extents oversized for demand</td><td>lower that class's <code>extent_mb</code></td></tr>
+    <tr><td><code>peak_alive_tiles ≤ tiles_per_extent</code></td><td>one extent always sufficed</td><td><code>extent_mb</code> can shrink</td></tr>
+    <tr><td>a fallback size-histogram bucket is persistently populous</td><td>a hot size sits just above the ceiling</td><td>add a class to absorb it</td></tr>
+    <tr><td><code>waste_pct</code> high + size histogram skewed low</td><td>requests cluster below <code>tile_size</code></td><td>add a finer class beneath it</td></tr>
+    <tr><td><code>inplace_realloc_total ≪ cross_class_realloc_total</code></td><td>the realloc fast path rarely hits</td><td>add finer classes around the churning sizes so grows stay in-class</td></tr>
+    <tr><td><code>align_histogram</code> all <code>align ≤ 8</code> for a class</td><td>nothing needs the extra alignment</td><td>a sub-power-of-two class there is safe and cuts waste</td></tr>
+  </tbody>
+</table>
+<p>The general principle: cover the buckets with the highest churn, and let the rare long tail fall back to dlmalloc.</p>
+
+<!-- ============================================================ -->
+<h2 id="system"><span class="n">9</span>System memory introspection</h2>
+<p>
+  The same pool counters back <strong>real implementations</strong> of Adobe's memory-introspection API,
+  replacing the previous hard-coded stubs (which returned a fixed 10&nbsp;MB / 90&nbsp;MB / 100&nbsp;MB
+  regardless of actual usage). AS3 content — including Flex's own memory monitors and any diagnostic overlay —
+  now reads truthful numbers. <code>System.as</code> declares them as native getters; AVM2 binds them to the
+  Rust functions by the usual naming convention (<code>get freeMemory → get_free_memory</code>).
+</p>
+<p>All four getters derive from two primitive measurements of the running module:</p>
+<ul>
+  <li><code>wasm_linear_memory_bytes()</code> — the total size of the module's linear memory right now
+    (<code>memory_size(0) × 64&nbsp;KiB</code>). It grows monotonically via <code>memory.grow</code>; the WASM
+    MVP has no shrink. This is the entire address space the module has obtained from the host.</li>
+  <li><code>heap_base()</code> — the link-time <code>__heap_base</code> symbol from wasm-ld. Bytes in
+    <code>[0, __heap_base)</code> are the fixed boot cost (statics + initial stack); bytes in
+    <code>[__heap_base, linear_memory)</code> are dynamic heap actually served by tilemalloc and the dlmalloc
+    fallback.</li>
+</ul>
+
+<figure>
+<svg viewBox="0 0 820 220" role="img" aria-labelledby="d6t d6d">
+  <title id="d6t">Linear memory layout and the System getters</title>
+  <desc id="d6d">Linear memory splits into boot cost and dynamic heap; the dynamic heap splits into live tiles, live fallback, and free; the four getters map onto these spans.</desc>
+  <!-- memory bar -->
+  <rect class="s-surf" x="40" y="40" width="120" height="40"/>
+  <text class="s-s" x="100" y="64" text-anchor="middle">boot cost</text>
+  <rect class="s-hi" x="160" y="40" width="200" height="40"/>
+  <text class="s-t" x="260" y="64" text-anchor="middle" font-size="11">live tiles</text>
+  <rect class="s-warn" x="360" y="40" width="150" height="40"/>
+  <text class="s-t" x="435" y="64" text-anchor="middle" font-size="11">live fallback</text>
+  <rect class="s-good" x="510" y="40" width="280" height="40"/>
+  <text class="s-t" x="650" y="64" text-anchor="middle" font-size="11">free</text>
+  <!-- markers -->
+  <text class="s-s" x="40" y="32">0</text>
+  <text class="s-acc" x="160" y="32" text-anchor="middle">__heap_base</text>
+  <text class="s-s" x="790" y="32" text-anchor="end">linear_memory</text>
+  <text class="s-s" x="650" y="98" text-anchor="middle">pool free lists · dlmalloc free lists · headroom past high-water</text>
+
+  <!-- brackets -->
+  <g stroke="var(--border2)" stroke-width="1.2" fill="none">
+    <path d="M40 120 L40 128 L790 128 L790 120"/>
+    <path d="M160 150 L160 158 L790 158 L790 150"/>
+    <path d="M510 180 L510 188 L790 188 L790 180"/>
+  </g>
+  <text class="s-t" x="44" y="142" font-size="11"><tspan class="s-mono">privateMemory</tspan> = linear_memory  (whole module incl. boot cost)</text>
+  <text class="s-t" x="164" y="172" font-size="11"><tspan class="s-mono">totalMemoryNumber</tspan> = linear_memory − __heap_base  (dynamic heap; Number, no 4 GiB cap)</text>
+  <text class="s-good-f" x="514" y="202" font-size="11"><tspan class="s-mono">freeMemory</tspan> = totalMemoryNumber − (live tiles + live fallback)  — rises after System.gc()</text>
+</svg>
+<figcaption>The "in use" term is <code>total_tile_alive_bytes() + fallback.bytes_alive</code>; everything else in the dynamic heap counts as free — the quantity that moves when a GC releases backing buffers.</figcaption>
+</figure>
+
+<table>
+  <thead><tr><th>Getter</th><th>Formula</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>totalMemoryNumber</code></td><td><code>linear_memory − heap_base</code></td><td>dynamic heap obtained (Number; no 4&nbsp;GiB cap)</td></tr>
+    <tr><td><code>totalMemory</code></td><td><code>totalMemoryNumber as uint</code></td><td>same value, legacy <code>uint</code> API</td></tr>
+    <tr><td><code>freeMemory</code></td><td><code>totalMemoryNumber − (live_tile_bytes + fallback_live_bytes)</code></td><td>allocated-but-unused heap; rises after <code>System.gc()</code></td></tr>
+    <tr><td><code>privateMemory</code></td><td><code>linear_memory</code></td><td>whole linear memory incl. boot cost</td></tr>
+  </tbody>
+</table>
+<p>
+  Adobe added <code>totalMemoryNumber</code> precisely because <code>totalMemory</code>'s <code>uint</code>
+  overflows past 4&nbsp;GiB; prefer the <code>Number</code> getters near the ceiling. On non-WASM (desktop)
+  targets the two primitives return 0 and the getters degrade to 0 — tilemalloc isn't the global allocator
+  there, so the counters wouldn't be meaningful anyway.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="wasm64"><span class="n">10</span>wasm64 support</h2>
+<p>
+  The 4&nbsp;GiB ceiling of wasm32 is the real wall for these XML workloads, so the memory getters are written
+  to survive a future <code>wasm64-unknown-unknown</code> build unchanged:
+</p>
+<ul>
+  <li><code>WASM_PAGE_SIZE</code> and <code>heap_base()</code> are gated on <code>target_family = "wasm"</code>,
+    which matches both wasm32 and wasm64. The page size (64&nbsp;KiB) and the <code>__heap_base</code> symbol
+    are identical on both, by spec and by wasm-ld respectively.</li>
+  <li><code>wasm_linear_memory_bytes()</code> has three arms: <code>wasm32::memory_size</code> (stable since
+    1.33), <code>wasm64::memory_size</code> (nightly <code>simd_wasm64</code>), and a non-WASM stub returning
+    0.</li>
+  <li><code>core/src/lib.rs</code> carries one crate attribute,
+    <code>#![cfg_attr(target_arch = "wasm64", feature(simd_wasm64))]</code>, enabling that intrinsic only on the
+    wasm64 target. It is inert on wasm32 and desktop (the predicate is false, so the pragma is never evaluated);
+    Ruffle's wasm64 pipeline already builds with <code>RUSTC_BOOTSTRAP=1</code>.</li>
+</ul>
+<p>
+  On a wasm64 build these getters return real values instead of 0, with no other change. The rest of the
+  allocator is pointer-width agnostic (<code>size_of::&lt;*mut ()&gt;()</code> drives the minimum tile size;
+  everything else is in terms of <code>usize</code>/<code>Layout</code>).
+</p>
+
+<!-- ============================================================ -->
+<h2 id="impact"><span class="n">11</span>Measured impact</h2>
+<p>End-to-end, on a real enterprise application loading XML into a Flex data grid:</p>
+<table>
+  <thead><tr><th>Workload</th><th>dlmalloc (stock Ruffle)</th><th>Tilemalloc</th><th>Result</th></tr></thead>
+  <tbody>
+    <tr><td>~100,000-row XML into a data grid</td><td>~30 s first load</td><td>~15 s first load</td><td class="pos">~2× faster</td></tr>
+    <tr><td>~250,000-row XML into a data grid</td><td>did not finish — aborted after 5 min</td><td>~40 s</td><td class="pos">from unusable to practical</td></tr>
+    <tr><td>Per-GC cost (full cycle)</td><td>heavy stutter, 100s of ms, grows with working set</td><td>fast, flat</td><td class="pos">drastically lower</td></tr>
+    <tr><td>dataProvider refresh on repeated loads</td><td>degrades as the working set grows</td><td>stable / O(1) per op</td><td class="pos">no slow creep</td></tr>
+  </tbody>
+</table>
+<p>
+  The 250,000-row case is the headline: without tilemalloc the load never completes in any reasonable time; with
+  it the same document is in the grid in about forty seconds. That is not a micro-optimisation — it changes
+  which documents the player can open at all.
+</p>
+<p>
+  The ~30&nbsp;s → ~15&nbsp;s gap shows up on the <em>first</em> load, against a fresh heap with no accumulated
+  fragmentation — which isolates the cost: it is the per-<code>malloc</code> free-list work for hundreds of
+  thousands of small tiles per cycle, not residual fragmentation from earlier loads. Tilemalloc serves each
+  from an intrusive free list with a single pointer load and head rewrite. The faster GC follows from the same
+  design: zero-coalescing frees, a regular cache-friendly heap layout, and a smaller working set with no
+  fragmentation to sweep.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="scope"><span class="n">12</span>Limitations &amp; PR scope</h2>
+<ul>
+  <li><strong>Grow-only</strong> by default — extents reach a steady-state size and stay there (the point: no
+    <code>memory.grow</code> churn); <code>trim</code> (§6) is the explicit, on-demand way to give a transient
+    spike back.</li>
+  <li><strong>Up-front footprint</strong> — ~160&nbsp;MiB of pool address space if every class is touched,
+    against wasm32's 4&nbsp;GiB ceiling. Tune <code>extent_mb</code> / the class set per workload.</li>
+  <li><strong>Single-thread only</strong> — <code>unsafe impl Sync</code> is sound only on the single-threaded
+    WASM runtime; a wasm-threads target would need a <code>Mutex</code>.</li>
+  <li><strong>Classes 1–3 bytes not representable</strong> — a consequence of the intrusive free list.</li>
+  <li><strong>Config errors panic at module init</strong> (the config is validated the first time the allocator
+    is used), rather than failing the build. A re-entrancy guard in <code>ensure_initialized</code> sets
+    <code>class_count</code> before populating any class, so allocations that re-enter during bootstrap fall
+    cleanly to the fallback instead of recursing.</li>
+</ul>
+<p>
+  The branch is self-contained for an upstream PR: a new <code>tilemalloc/</code> directory (4 files) plus a
+  handful of touched files, <strong>zero added AS3 surface</strong> (the <code>System</code> getters were
+  already declared — only their bodies changed from stub to native), and no dependency on Ruffle's
+  Flex/AVM2 leak-analysis instrumentation (which lives elsewhere and is out of scope). The nine instruments are
+  part of the allocator and are <em>not</em> to be stripped before the PR — they measure only the tile pool and
+  are what makes it tunable.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="appendix"><span class="n">A</span>Appendix — files &amp; types</h2>
+<table>
+  <thead><tr><th>File</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr><td><code>tilemalloc/mod.rs</code></td><td>Module entry, design doc, and the shared <code>GLOBAL_TILEMALLOC: TileAllocator</code> instance.</td></tr>
+    <tr><td><code>tilemalloc/config.rs</code></td><td><code>TileClass { size_bytes, extent_mb }</code>, the <code>TILE_CONFIG</code> size-class table (the file to edit when tuning), and the <code>ENABLE_HISTOGRAMS</code> build toggle.</td></tr>
+    <tr><td><code>tilemalloc/core.rs</code></td><td>The allocator itself: <code>TileAllocator</code>, <code>ClassState</code>, <code>ExtentRecord</code>, <code>FreeTile</code>; <code>pick_class</code>, <code>add_extent</code>, <code>class_alloc</code>/<code>class_dealloc</code>, <code>trim_empty_extents</code>, and the <code>GlobalAlloc</code> impl.</td></tr>
+    <tr><td><code>tilemalloc/stats.rs</code></td><td><code>TileAllocatorStats</code> / <code>TileClassStats</code> / <code>TileFallbackStats</code> with <code>to_json()</code> and <code>to_table()</code>.</td></tr>
+    <tr><td><code>web/src/lib.rs</code></td><td>The <code>#[global_allocator]</code> wrapper delegating to <code>GLOBAL_TILEMALLOC</code>, and the <code>tilemallocStats</code>/<code>tilemallocTable</code>/<code>tilemallocTrim</code> JS exports installed as <code>window</code> globals at boot.</td></tr>
+    <tr><td><code>…/flash/system/System.as</code></td><td>The four memory getters: from hard-coded stubs to native getters bound to the Rust helpers.</td></tr>
+    <tr><td><code>…/flash/system/system.rs</code></td><td>The WASM linear-memory introspection helpers backing the getters (gated <code>target_family = "wasm"</code>).</td></tr>
+    <tr><td><code>core/src/lib.rs</code></td><td><code>pub mod tilemalloc;</code> plus the <code>simd_wasm64</code> feature gate used only on wasm64.</td></tr>
+  </tbody>
+</table>
+
+<h3>Key types</h3>
+<ul>
+  <li><code>TileAllocator</code> — the <code>GlobalAlloc</code> implementor; <code>UnsafeCell</code>-wrapped inner state, <code>Sync</code> on single-threaded wasm.</li>
+  <li><code>ClassState</code> — per-class runtime: <code>tile_size</code>, <code>tile_align</code>, <code>tiles_per_extent</code>, <code>free_head</code>, the <code>bump_ptr</code>/<code>bump_end</code> carve cursor, the <code>Vec&lt;ExtentRecord&gt;</code>, and the counters.</li>
+  <li><code>ExtentRecord</code> — one extent's <code>ptr</code> + <code>total_bytes</code>, plus the transient <code>free_count</code>/<code>bucket</code> scratch used only during a <code>trim</code> sweep.</li>
+  <li><code>FreeTile</code> — <code>{ next: *mut FreeTile }</code>, written into the first bytes of a free tile (hence <code>size_bytes ≥ 4</code>).</li>
+</ul>
+
+<div class="footer">
+  Self-contained document — no external dependencies (all diagrams are inline SVG). Light/dark theme follows
+  <code>prefers-color-scheme</code>. Editable directly as a text file. Companion documents:
+  <code>xml-readonly-improvements.html</code>, <code>xml-general-improvements.html</code>.
+</div>
+
+</div>
+</body>
+</html>

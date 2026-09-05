@@ -2,173 +2,246 @@
   <a href="https://ruffle.rs"><img alt="Ruffle" src="https://ruffle.rs/logo.svg" /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/ruffle-rs/ruffle/actions"><img alt="Rust Build Status" src="https://img.shields.io/github/actions/workflow/status/ruffle-rs/ruffle/test_rust.yml?label=Rust%20Build&logo=github&branch=master" /></a>
-  <a href="https://github.com/ruffle-rs/ruffle/actions/workflows/test_web.yml"><img alt="Web Build Status" src="https://img.shields.io/github/actions/workflow/status/ruffle-rs/ruffle/test_web.yml?label=Web%20Build&logo=github&branch=master" /></a>
-  <a href="https://discord.gg/ruffle"><img alt="Ruffle Discord" src="https://img.shields.io/discord/610531541889581066?label=&color=7389d8&labelColor=6a7ec2&logoColor=ffffff&logo=discord" /></a>
-  <a href="https://crowdin.com/project/ruffle"><img alt="Ruffle translations" src="https://badges.crowdin.net/ruffle/localized.svg" /></a>
+  <a href="https://github.com/ruffle-rs/ruffle"><img alt="Fork of ruffle-rs/ruffle" src="https://img.shields.io/badge/fork%20of-ruffle--rs%2Fruffle-007acc?logo=github" /></a>
+  <a href="#license"><img alt="License: MIT or Apache-2.0" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-007acc" /></a>
+  <a href="https://github.com/falpi/ruffle-enterprise/tags"><img alt="Release tags" src="https://img.shields.io/github/v/tag/falpi/ruffle-enterprise?filter=enterprise-*&label=release&color=007acc&logo=git" /></a>
   <br />
-  <a href="https://addons.mozilla.org/en-US/firefox/addon/ruffle_rs/"><img alt="Firefox Extension" src="https://img.shields.io/amo/v/ruffle_rs?logo=firefoxbrowser&logoColor=white&label=firefox" /></a>
-  <a href="https://chromewebstore.google.com/detail/ruffle-flash-emulator/donbcfbmhbcapadipfkeojnmajbakjdc"><img alt="Chrome Extension" src="https://img.shields.io/chrome-web-store/v/donbcfbmhbcapadipfkeojnmajbakjdc?logo=googlechrome&logoColor=white&label=chrome" /></a>
-  <a href="https://flathub.org/apps/rs.ruffle.Ruffle"><img alt="Ruffle Flathub" src="https://img.shields.io/flathub/v/rs.ruffle.Ruffle?color=007acc&logo=flathub" /></a>
-  <a href="https://www.npmjs.com/package/@ruffle-rs/ruffle"><img alt="Ruffle npm" src="https://img.shields.io/npm/v/@ruffle-rs/ruffle?color=007acc&logo=npm" /></a>
-  <a href="https://aur.archlinux.org/packages/ruffle-nightly-bin"><img alt="Ruffle AUR" src="https://img.shields.io/aur/version/ruffle-nightly-bin?logo=archlinux" /></a>
-  <br />
-  <strong><a href="https://ruffle.rs">website</a> | <a href="https://ruffle.rs/demo">demo</a> | <a href="https://github.com/ruffle-rs/ruffle/releases">nightly builds</a> | <a href="https://github.com/ruffle-rs/ruffle/wiki">wiki</a></strong>
+  <strong><a href="https://github.com/ruffle-rs/ruffle">upstream Ruffle</a> | <a href="https://ruffle.rs">ruffle.rs</a> | <a href="https://github.com/ruffle-rs/ruffle/wiki">upstream wiki</a></strong>
 </p>
 
-# Ruffle
+# Ruffle Enterprise
 
-Ruffle is an Adobe Flash Player emulator written in the Rust programming language. Ruffle targets both the desktop and the web using WebAssembly.
+**A downstream fork of [Ruffle](https://github.com/ruffle-rs/ruffle) targeted at large-scale Adobe Flex 4.6 enterprise applications with heavy XML data workloads.**
+
+This fork accumulates patches and experiments that address constraints typical of enterprise Flex applications running on Ruffle: hundreds-of-megabytes E4X datasets, long-lived sessions with aggressive memory pressure, MX/Spark rendering precision, AVM compatibility edge cases, native APIs missing or incomplete upstream, and the 4 GiB Wasm32 memory ceiling. Whenever a change is general-purpose, it is proposed upstream as an isolated pull request; this repository bundles them together with Flex-specific patches whose narrow applicability makes them unsuitable for upstream submission.
+
+This is **not** a replacement of upstream Ruffle and does **not** claim official status. All trademarks and project assets (the Ruffle name and logo) are property of the upstream Ruffle authors; the "Enterprise" qualifier here only describes the workload class this fork is tuned for.
 
 ## Table of Contents
+* [When this fork is for you](#when-this-fork-is-for-you)
 * [Project status](#project-status)
-* [Using Ruffle](#using-ruffle)
-* [Building from source](#building-from-source)
-  * [Prerequisites](#prerequisites)
-  * [Linux prerequisites](#linux-prerequisites)
-  * [Desktop](#desktop)
-    * [Build](#build)
-    * [macOS](#macos)
-  * [Web or Extension](#web-or-extension)
-  * [Android](#android)
-  * [Scanner](#scanner)
-  * [Exporter](#exporter)
+* [Using this fork](#using-this-fork)
+* [Building a release](#building-a-release)
+* [Branches](#branches)
+  * [Published branches](#published-branches)
+  * [Memory & E4X data workloads](#memory--e4x-data-workloads)
+  * [Native AS3 APIs](#native-as3-apis)
+  * [MX/Spark rendering & input fixes](#mxspark-rendering--input-fixes)
+  * [AVM compatibility fixes](#avm-compatibility-fixes)
+  * [Experimental targets and subsystems](#experimental-targets-and-subsystems)
+* [Relationship with upstream](#relationship-with-upstream)
 * [Structure](#structure)
-* [Sponsors](#sponsors)
 * [License](#license)
 * [Contributing](#contributing)
 
 
+## When this fork is for you
+
+Use this fork if:
+* You run Flash applications built with **Adobe Flex 4.6 SDK** in a production / enterprise context.
+* Your SWF processes **XML datasets of tens to hundreds of thousands of E4X nodes** and you observe memory pressure or out-of-memory failures on the standard builds.
+* You need native APIs that upstream does not implement or implements only partially (streaming `URLStream`, an XLSX/CSV export utility, complete E4X change-notification events).
+* You see specific glitches on MX/Spark components — hairline grid separators, mouse hover on buttons, click release semantics, `scrollRect` hit-testing — that block production use.
+* You ship a SWF inside an **Electron** wrapper and hit `WebAssembly.instantiateStreaming` failures.
+* You are evaluating **wasm64** as a way to lift the 4 GiB linear-memory ceiling for very large sessions.
+
+Use **upstream Ruffle** for everything else: games, animations, generic SWF content, AS1/AS2 workloads, casual use, browser extension distribution.
+
+
 ## Project status
 
-Ruffle supports ActionScript 1, 2 and 3 pretty well, but it's still not finished by any means. Please report any issues in the [Issue Tracker](https://github.com/ruffle-rs/ruffle/issues).
+The fork tracks upstream `master` on a dedicated branch with zero divergence. Fork-only meta assets (this README, the rebuild scripts, and any other content specific to the fork) live on the [`ruffle-enterprise`](../../tree/ruffle-enterprise) branch as an independent thin layer above `master`. Each `fix-*` / `add-*` feature branch is rebased on the latest upstream `master` and is intended to be submittable as an isolated pull request. The current status of each upstream PR is recorded in the branch tables below.
 
-## Using Ruffle
+Release builds are produced by rebuilding a **local, ephemeral** integration branch (`local/merge-wasm32`, and its wasm64 sibling) that merges `master + feature branches` in a defined order. That branch is a build artefact and is not pushed to the remote — every rebuild rewrites its history from scratch. A point-in-time set of inputs can be frozen into an immutable `snapshot-<tag>/*` tag namespace and rebuilt on demand. Publishable release state is captured on annotated release tags applied to a validated integration tip. See [Building a release](#building-a-release) for the operational procedure.
 
-The easiest way to try out Ruffle is to visit the [web demo page](https://ruffle.rs/demo/), then click the "Select File" button to load a SWF file of your choice.
+For functional Flash Player emulation status, refer to the [upstream project status](https://github.com/ruffle-rs/ruffle#project-status) — this fork does not alter the supported subset of ActionScript / SWF features.
 
-[Nightly builds](https://ruffle.rs/downloads#nightly-releases) of Ruffle are available for desktop and web platforms.
 
-For more detailed instructions, see our [wiki page](https://github.com/ruffle-rs/ruffle/wiki/Using-Ruffle).
+## Using this fork
 
-## Building from source
+All general documentation — usage, prerequisites, contributing, project structure — is **unchanged from upstream** and lives there. Refer to:
+
+* [Upstream README](https://github.com/ruffle-rs/ruffle/blob/master/README.md) for build prerequisites, desktop / web / Android / scanner / exporter instructions
+* [Upstream Wiki](https://github.com/ruffle-rs/ruffle/wiki) for end-user guides
+* [CONTRIBUTING.md](CONTRIBUTING.md) for the upstream contribution guidelines (unchanged here)
+
+To **consume** an already-produced release, check out its release tag rather than a branch:
+
+```shell
+git checkout <release-tag>-wasm32         # the wasm32 release tag; -wasm64 for the Memory64 build
+cargo run --release --package=ruffle_desktop
+```
+
+Release tags are immutable and reproducibly point at the exact commit that was validated for that release; unlike branches, they are not rewritten by future rebuilds. (The exact release-tag naming standard is not yet fixed.)
+
+To **produce** a new release build yourself (which is the way to get the latest enterprise patch-set applied to the current upstream tip), see [Building a release](#building-a-release) below.
+
+
+## Building a release
+
+Release builds are produced by rebuilding the local, ephemeral `local/merge-wasm32` and `local/merge-wasm64` integration branches. A single run of [`scripts/Merge-Branches.ps1`](scripts/Merge-Branches.ps1) (which lives on the [`ruffle-enterprise`](../../tree/ruffle-enterprise) branch) produces both. The same script can also rebuild a frozen historical snapshot — see [Freezing and rebuilding a snapshot](#freezing-and-rebuilding-a-snapshot).
 
 ### Prerequisites
 
-* Latest stable channel of [Rust](https://www.rust-lang.org/tools/install)
-* Java, available on your PATH as `java` (required for building the library containing the builtin Flash classes for ActionScript 3)
+* A local clone of this repository with `origin` pointing at `falpi/ruffle-enterprise`. No `upstream` remote is required for the build procedure itself.
+* Latest stable Rust toolchain (for the standard build) and Rust beta (used by the CI-gate checks). For actually **building** the wasm64 variant, additionally a nightly toolchain with `-Z build-std` support for the Tier-3 `wasm64-unknown-unknown` target. The rebuild script itself does not compile wasm64 — it only produces the integration branch — so nightly is only needed at build time.
+* By default the merge uses your **local** feature branches (so unpushed work can be built and tested); pass `-FromOrigin` to build from the pushed `origin/*` tips instead. Either way the script assumes the feature branches in its `$MergeOrder` are rebased on the current `master`. Moving to a newer upstream `master` is therefore a separate operational step (fetching upstream, fast-forwarding `master`, and rebasing every feature branch on the new tip — see `Rebase-Branches.ps1`) and is intentionally not part of this build procedure.
 
-### Linux prerequisites
+### Rebuild procedure
 
-The following are typical dependencies for Linux:
+1. Switch to the branch that carries the script (fetch too, so divergence warnings and any `-FromOrigin` build compare against current remote tips):
+    ```shell
+    git fetch origin
+    git checkout ruffle-enterprise
+    ```
+    By default the script merges your **local** feature branches (at whatever commit they are), warning per branch when a local branch diverges from its `origin/*` counterpart so nothing enters the build unnoticed; a branch with no local copy falls back to `origin/<branch>`. Pass `-FromOrigin` to merge the pushed `origin/*` refs instead — in that mode the feature branches need not be checked out locally.
+2. Run the rebuild script (PowerShell 5.1+ on Windows, no dependencies beyond git and cargo):
+    ```shell
+    powershell.exe -File .\scripts\Merge-Branches.ps1
+    ```
+    Available flags: `-DryRun` (print each command without executing), `-NoChecks` (skip fmt/clippy gate), `-FromOrigin` (merge the pushed `origin/*` instead of the local branches), `-Snapshot <tag>` (rebuild a frozen snapshot instead of the live branches — see below). In order, the script:
+    * resets `local/merge-wasm32` to the local `master` branch,
+    * merges each feature branch with `--no-ff` in the order defined by `$MergeOrder`,
+    * runs `rustfmt --check --edition 2024` on files touched by the branch,
+    * runs `cargo +beta clippy --all --tests` with JSON-parsed output, gating only findings that fall on files modified by the branch (upstream lints stay informational),
+    * chains `local/merge-wasm64` on top of the wasm32 tip by resetting it to wasm32 and merging `add-wasm64-target` (from the same source as the other branches).
+    By construction, `git diff local/merge-wasm32 local/merge-wasm64` equals the wasm64 feature patch.
+3. Test the resulting builds (desktop and/or web for wasm32; web with a Memory64-capable browser for wasm64).
+4. If validated, tag each release tip with an annotated release tag and push the tags. The release-tag naming standard is not yet fixed — substitute your chosen scheme for `<release-tag>`:
+    ```shell
+    git tag -a <release-tag>-wasm32 -m "..."
+    git tag -a <release-tag>-wasm64 -m "..."
+    git push origin <release-tag>-wasm32 <release-tag>-wasm64
+    ```
 
-* Ubuntu/Debian:
-  ```shell
-  sudo apt install pkg-config libasound2-dev libudev-dev libfontconfig-dev libfreetype6-dev libssl-dev default-jre-headless g++
-  ```
+### Freezing and rebuilding a snapshot
 
-* Fedora/RHEL:
-  ```shell
-  sudo dnf install pkgconf-pkg-config alsa-lib-devel systemd-devel fontconfig-devel freetype-devel openssl-devel java-latest-openjdk-headless gcc-c++
-  ```
+The live procedure above merges your current feature branches (local by default). To pin the exact set of inputs that produced a build — so it can be rebuilt later, on any machine — freeze them into an immutable `snapshot-<tag>/*` tag namespace with [`scripts/Tag-Snapshot.ps1`](scripts/Tag-Snapshot.ps1):
 
-### Desktop
+```shell
+powershell.exe -File .\scripts\Tag-Snapshot.ps1 -Snapshot <tag>
+```
 
-#### Build
+This tags `snapshot-<tag>/master`, `snapshot-<tag>/ruffle-enterprise` (the tooling) and `snapshot-<tag>/<branch>` for every feature branch — pure pointers, no history is copied. A snapshot captures **published** state: each feature-branch pointer resolves to the pushed `origin/<branch>` when present (else the local branch), so push before snapshotting. `<tag>` is an opaque label; the naming standard is deliberately left open. Push the namespace to make the fallback durable off-machine (the script prints the exact command).
 
-Use the following command to build and run the desktop app:
+To rebuild a frozen snapshot, pass `-Snapshot <tag>` to the merge script: it merges the `snapshot-<tag>/*` tags instead of the live branches, into `local/merge-wasm32-<tag>` / `local/merge-wasm64-<tag>` (the output always stays under `local/`, never in the immutable namespace), and implies `-NoChecks`:
 
-`cargo run --release --package=ruffle_desktop`
+```shell
+powershell.exe -File .\scripts\Merge-Branches.ps1 -Snapshot <tag>
+```
 
-To run a specific SWF file, pass the SWF path as an argument:
+To reproduce a snapshot **exactly**, use that snapshot's own frozen tooling rather than the live script — its `$MergeOrder` is pinned, whereas the live one evolves:
 
-`cargo run --release --package=ruffle_desktop -- test.swf`
+```shell
+git show snapshot-<tag>/ruffle-enterprise:scripts/Merge-Branches.ps1 > run.ps1
+powershell.exe -File run.ps1 -Snapshot <tag>
+```
 
-To build in debug mode, simply omit `--release` from the command.
+### What the script reads and touches
 
-Desktop has a few optional features which you can specify via `--features`, comma separated:
+* **Source of the feature branches.** By default each merge reads your **local** feature branch when one exists — so work you have committed locally but not pushed is built and can be tested before publishing — falling back to `origin/<branch>` when no local branch exists. The script warns per branch when the local tip diverges from `origin/*` (ahead / behind / diverged), so nothing enters the build unnoticed. Pass `-FromOrigin` for the opposite discipline: merge only the pushed `origin/*`, so the build is fully determined by the remote and any two clones produce the same tree ("push to publish"). Reproducible, machine-independent builds are the job of `-Snapshot` (frozen tags), not of the live path.
 
-* `tracy`: Enables profiling to [Tracy](https://github.com/wolfpld/tracy). You may need to expand the log filter to see everything, e.g. `RUST_LOG="warn,ruffle=debug"`
-* `tracy_images`: Enables Tracy frame captures. Implies `tracy`.
-* `tracy_avm`: Enables profiling AVM execution with Tracy. Implies `tracy`.
-* `render_debug_labels`: Enables debug labels during rendering, useful for debugging graphics with [renderdoc](https://renderdoc.org/) or similar.
+* **Working-tree caveat.** The script begins by checking out `local/merge-wasm32` (or `local/merge-wasm32-<tag>` with `-Snapshot`). If the branch you are currently on has uncommitted modifications to a file whose contents differ on the target branch, `git checkout` will refuse with `your local changes would be overwritten by checkout`. Commit, stash, or discard those modifications and re-run. The feature branches themselves are never checked out by the script — their contents are read through the branch ref (local by default, `origin/*` under `-FromOrigin`) rather than via a checkout — so any feature-branch working state remains untouched by a rebuild.
 
-#### macOS
+### Design notes
 
-Ruffle desktop can be built from our [Homebrew Tap](https://github.com/ruffle-rs/homebrew-ruffle/):
+* Both integration branches are **local by convention** (the `local/` prefix follows the same convention used for other local-only branches in this workflow). They are intentionally never pushed: republishing artefacts whose history is rewritten on every rebuild would only add noise to the remote.
+* The rebuild is deterministic given the ingredients — `master` + the tips of the feature branches + the script's merge order + `git rerere` state for pre-recorded conflict resolutions. Any two clones running the script on the same inputs produce the same commit tree.
+* `git rerere` is enabled by the script (idempotent) so recurring merge conflicts (e.g. between `xml-general-improvements` and `xml-readonly-improvements`) are resolved once and replayed automatically on every subsequent rebuild.
+* The wasm64 chain runs only if the wasm32 rebuild and CI gate succeeded. If either fails, the script aborts before touching the wasm64 branch, so wasm64 never reflects an unvalidated wasm32 tip.
 
-`brew install --HEAD ruffle-rs/ruffle/ruffle`
 
-_Note: because it is HEAD-only, you'll need to run `brew upgrade --fetch-HEAD ruffle` each time you want to update._
+## Branches
 
-### Web or Extension
+The repository exposes the branches listed below. Single-purpose branches (one feature or one fix each) are intentionally kept rebasable so they can be submitted upstream as isolated PRs; the rebuild script combines a curated subset of them into a local integration branch for release builds (see [Building a release](#building-a-release)).
 
-Follow [the instructions in the web directory](web/README.md#building-from-source) for building
-either the web or browser extension version of Ruffle.
+Per-branch design notes, when present, live under [`docs/`](docs/) on the [`ruffle-enterprise`](../../tree/ruffle-enterprise) branch (this one). They are collected here rather than committed alongside the feature branches so upstream PRs stay code-only.
 
-This project is tested with BrowserStack.
+### Published branches
 
-### Android
+| Branch | Purpose |
+| --- | --- |
+| [`master`](../../tree/master) | Strict mirror of [upstream `ruffle-rs/ruffle@master`](https://github.com/ruffle-rs/ruffle). Never committed to directly; advanced only via `git fetch upstream && git merge --ff-only`. |
+| [`ruffle-enterprise`](../../tree/ruffle-enterprise) | **Fork identity branch (default landing branch).** Carries only the fork-only meta assets (this README, `scripts/`, `docs/`) as a thin linear layer above `master`. Rebased on top of `master` when upstream advances (via a separate helper script). Not intended for building and not a parent of the integration branch — its content is deliberately kept isolated so the build integration stays a pure "master + features" tree. |
 
-Follow the [instructions](https://github.com/ruffle-rs/ruffle-android/blob/main/CONTRIBUTING.md#building-from-source) in the `ruffle-android` project for building the Android application of Ruffle.
+The integration branches (`local/merge-wasm32` and `local/merge-wasm64`) are **not published** here: they are ephemeral local artefacts rebuilt from scratch on every release. Their releases are published as immutable release tags, which are the correct target for anyone wanting a fixed reference to a validated build.
 
-### Scanner
+### Memory & E4X data workloads
 
-If you have a collection of "real world" SWFs to test against, the scanner may be used to benchmark
-ruffle's parsing capabilities. Provided with a folder and an output filename, it will attempt to read
-all of the Flash files and report on the success of such a task.
+| Branch | Upstream PR | Summary |
+| --- | --- | --- |
+| [`fix-memory-leaks`](../../tree/fix-memory-leaks) | [#23897](https://github.com/ruffle-rs/ruffle/pull/23897) (open) | Five independent AVM2 leak fixes for long-running ActionScript 3 sessions: `Dictionary` weak-keys handling, `EventDispatcher` strong/weak handler refs, `System.gc()` performing an actual full GC cycle, `DispatchList` add-time prune, `Dictionary` set-time prune. Each fix is self-contained and PR-ready. |
+| [`tile-memory-allocator`](../../tree/tile-memory-allocator) | [#24000](https://github.com/ruffle-rs/ruffle/pull/24000) (closed — retained here) | Size-class slab allocator (`tilemalloc`) for the small-object churn typical of heavy E4X workloads. Intrusive free lists, O(1) alloc/dealloc, built-in diagnostic instrument suite (waste tracking, request-size histogram, peak alive tiles, realloc counters). Empirical 2–3× speed-up on 100 k-row XML loads and unlocks 250 k-row scenarios. Closed upstream as too specific, retained here for production use. See [`docs/tile-memory-allocator.html`](docs/tile-memory-allocator.html). |
+| [`xml-general-improvements`](../../tree/xml-general-improvements) | _(fork-only)_ | Layered E4X record shrinks: `E4XNodeKind::Element` boxed payload, `children` field as `SmallVec<[_; 1]>` with single-child inline collapse, `namespaces` field as lazy `Option<Box<Vec>>`, string interning for values and namespaces on parse. Drops per-node footprint for leaf-dominated XML trees by ≈30% with no API change. See [`docs/xml-general-improvements.html`](docs/xml-general-improvements.html). |
+| [`xml-readonly-improvements`](../../tree/xml-readonly-improvements) | _(fork-only)_ | New `XMLReadOnly` built-in type with arena-backed storage and O(1) chunk tracing. Provides full E4X query parity (`..`, `@`, `for each`, indexing, `length()`, text accessors) plus a native `sortKeyed()` fast-path for row-oriented datasets. Node record reduced from 36 B → 28 B with single-child inline collapse: ≈33% memory reduction on a 250 k-row reference workload. See [`docs/xml-readonly-improvements.html`](docs/xml-readonly-improvements.html). |
+| [`xml-notifications-completion`](../../tree/xml-notifications-completion) | [#24131](https://github.com/ruffle-rs/ruffle/pull/24131) (open) | Completes the E4X change-notification surface: `textSet`, `nodeAdded`, `nodeRemoved`, `namespaceAdded`, `namespaceRemoved` events that are missing upstream. Without them, Flex property binding on E4X-derived structures silently ignores certain mutations, which is the root cause of long-standing "the panel doesn't refresh" symptoms in enterprise applications. See [`docs/xml-notifications-completion.html`](docs/xml-notifications-completion.html). |
 
-`cargo run --release --package=ruffle_scanner -- scan folder/with/swfs/ results.csv`
+### Native AS3 APIs
 
-### Exporter
+| Branch | Upstream PR | Summary |
+| --- | --- | --- |
+| [`add-export-instruments`](../../tree/add-export-instruments) | _(fork-only)_ | Native `ExportUtils` built-in providing streaming XLSX / CSV export from AS3, sized for enterprise recordsets. Streaming ZIP with on-the-fly deflate keeps peak memory O(1) per row, so 1 M-row exports do not push the wasm32 4 GiB ceiling. Automatic per-column type detection (numeric / date / string) with correct XLSX cell formatting. Sync (`syncExport`) and async-chunked (`asyncExport*`) variants; a companion `FlexUtils.exportGridToExcel` wrapper drives an `ActiveProgress` popup on Flex `DataGrid` sources. See [`docs/add-export-instruments.html`](docs/add-export-instruments.html). |
+| [`add-urlstream-implementation`](../../tree/add-urlstream-implementation) | [#24078](https://github.com/ruffle-rs/ruffle/pull/24078) (open) | Streaming implementation of `flash.net.URLStream`. Chunks are exposed to AS3 through `IDataInput` as they arrive over the wire instead of being buffered whole, enabling efficient consumption of large SOAP / binary recordset responses from long-lived enterprise sessions. Unifies the underlying transport with `URLLoader`. |
+| [`add-font-text-engine-implementation`](../../tree/add-font-text-engine-implementation) | [#24153](https://github.com/ruffle-rs/ruffle/pull/24153) (open) | Implements the Flash Text Engine (`flash.text.engine`) on top of upstream's native `TextBlock` object: real line breaking driven by the core layout engine, real glyph metrics, `TextLine` chains, and content invalidation. Provides the low-level text substrate the Text Layout Framework (TLF) — and therefore Spark text components — builds on. See [`docs/add-font-text-engine-implementation.html`](docs/add-font-text-engine-implementation.html). |
 
-If you have a SWF file and would like to capture an image of it, you may use the exporter tool.
-This currently requires hardware acceleration, but can be run headless (with no window).
+### MX/Spark rendering & input fixes
 
-- `cargo run --release --package=exporter -- path/to/file.swf`
-- `cargo run --release --package=exporter -- path/to/file.swf path/to/screenshots --frames 5`
+| Branch | Upstream PR | Summary |
+| --- | --- | --- |
+| [`fix-blurry-grid-separators`](../../tree/fix-blurry-grid-separators) | [#23837](https://github.com/ruffle-rs/ruffle/pull/23837) (open) | `lineStyle` 1 px orthogonal strokes are snapped to the pixel grid, fixing the blurry hairline separators rendered by `mx.controls.DataGrid` and similar Flex chrome. Closes upstream issue [#23814](https://github.com/ruffle-rs/ruffle/issues/23814). See [`docs/fix-blurry-grid-separators.html`](docs/fix-blurry-grid-separators.html). |
+| [`fix-bitmapdata-filter-expansion`](../../tree/fix-bitmapdata-filter-expansion) | [#24136](https://github.com/ruffle-rs/ruffle/pull/24136) (open) | Native implementation of `BitmapData.generateFilterRect` (AVM1 + AVM2) together with dest-rectangle expansion in the wgpu `applyFilter` path. Root cause of the missing shadow on Flex `mx.controls.ToolTip` (halo `ToolTipBorder`, also under the Spark 4.6 theme): the stub returned `sourceRect` unchanged, so `mx.graphics.RectangularDropShadow` computed zero-thickness shadow slices and drew nothing. Same failure mode affects `DownloadProgressBar` / `SparkDownloadProgressBar` preloader shadows. A shared `Filter::calculate_dest_margins` helper keeps `generateFilterRect` and `applyFilter` margins consistent. See [`docs/fix-bitmapdata-filter-expansion.html`](docs/fix-bitmapdata-filter-expansion.html). |
+| [`fix-mouse-events-clipping`](../../tree/fix-mouse-events-clipping) | [#23797](https://github.com/ruffle-rs/ruffle/pull/23797) (open) | Mouse hit-testing now respects `scrollRect` when picking AVM1/AVM2 children. Previously, children clipped out of view by `scrollRect` (typical of `VGroup` / `HGroup` with `clipAndEnableScrolling`) remained clickable. Closes upstream issue [#23678](https://github.com/ruffle-rs/ruffle/issues/23678). |
+| [`fix-mouse-click-release-outside-buttons`](../../tree/fix-mouse-click-release-outside-buttons) | [#23803](https://github.com/ruffle-rs/ruffle/pull/23803) (open) | AVM2 no longer fires a spurious `click` when the mouse is released outside a pressed button. The structural equality fallback used by AVM1 (`check_display_object_equality`) was being incorrectly applied to AVM2, where dynamically-created objects all share depth = 0 and id = 0. Closes upstream issue [#23798](https://github.com/ruffle-rs/ruffle/issues/23798). |
+| [`fix-mouse-hover-on-mx-buttons`](../../tree/fix-mouse-hover-on-mx-buttons) | [#23807](https://github.com/ruffle-rs/ruffle/pull/23807) (open) | Drag operations no longer double-dispatch `rollOver` / `rollOut` to the pressed object in AVM2. Fixes `mx.controls.Button` jumping to the `UP` skin state during outside-drag and failing to restore `DOWN` on re-entry. Closes upstream issue [#23801](https://github.com/ruffle-rs/ruffle/issues/23801). |
+| [`add-text-input-event-dispatch`](../../tree/add-text-input-event-dispatch) | [#24151](https://github.com/ruffle-rs/ruffle/pull/24151) (open) | Dispatches `TextEvent.TEXT_INPUT` to focused AVM2 objects that are not native `EditText` — which is what enables keyboard entry in TLF-based Spark `TextInput` / `TextArea`. Previously only native text fields received the event, so Spark inputs silently swallowed typing. See [`docs/add-text-input-event-dispatch.html`](docs/add-text-input-event-dispatch.html). |
+
+### AVM compatibility fixes
+
+| Branch | Upstream PR | Summary |
+| --- | --- | --- |
+| [`fix-arcgis-flex-sdk-too-much-recursion`](../../tree/fix-arcgis-flex-sdk-too-much-recursion) | [#23355](https://github.com/ruffle-rs/ruffle/pull/23355) (open) | Reentrancy guard on the AVM2 `removed` / `removedFromStage` event dispatch. When an AS3 listener responds to the removal event by calling `removeChild` again on the same subtree, the recursive invocation re-enters the same dispatch and overflows the stack. A `BEING_REMOVED` flag on the display object is set at dispatch entry and cleared at exit, so the recursive call bails out immediately — matching Flash Player behaviour. Closes upstream issue [#22860](https://github.com/ruffle-rs/ruffle/issues/22860) (encountered while running the ArcGIS Flex SDK). |
+| [`fix-collator-compare-normalization`](../../tree/fix-collator-compare-normalization) | [#24148](https://github.com/ruffle-rs/ruffle/pull/24148) (open) | Normalizes `flash.globalization.Collator.compare` to return exactly `-1` / `0` / `1`. Flex's `Sort.findItem` switches on the exact returned value for its binary search, so any other magnitude drove the Spark `DataGrid` sort into an infinite loop. |
+| [`fix-electron-instantiate-streaming`](../../tree/fix-electron-instantiate-streaming) | [#23984](https://github.com/ruffle-rs/ruffle/pull/23984) (closed) | Detects Node-like environments and falls back to `WebAssembly.instantiate` from an `ArrayBuffer` instead of `instantiateStreaming`. Required since `wasm-bindgen` 0.2.120+ dispatches a `Response` object that Electron renderers with `nodeIntegration = true` reject. Relevant for SWFs shipped inside Electron-based desktop wrappers. |
+
+### Experimental targets and subsystems
+
+| Branch | Upstream PR | Summary |
+| --- | --- | --- |
+| [`add-wasm64-target`](../../tree/add-wasm64-target) | [#23981](https://github.com/ruffle-rs/ruffle/pull/23981) (closed — pending ecosystem maturity) | Opt-in `wasm64-unknown-unknown` (Memory64) build target alongside the standard `wasm32` builds. Lifts the 4 GiB linear-memory ceiling on browsers supporting Memory64 (Chrome / Firefox via V8 / SpiderMonkey). Tier-3 Rust target, requires `-Z build-std`. Closed upstream pending crate-ecosystem support; retained here as the feature branch merged into the `local/merge-wasm64` integration on top of the wasm32 build. |
+| [`pluggable-font-renderer`](../../tree/pluggable-font-renderer) | [#23492](https://github.com/ruffle-rs/ruffle/pull/23492) (open) | Indirection layer in the device-font rasterization path so embedders can plug in an external rasterizer module (the reference implementation drives GDI on Windows for pixel-perfect parity with native Flash Player). See [`docs/pluggable-font-renderer.html`](docs/pluggable-font-renderer.html). |
+
+
+## Relationship with upstream
+
+* **`master`** is a strict mirror of upstream. It is advanced via `git fetch upstream && git merge --ff-only`; no commit lands directly on it. Tags and releases produced by upstream are not republished here.
+* **`ruffle-enterprise`** carries only fork-only meta assets (this README, `scripts/`, `docs/`) as a thin linear layer above `master`. When `master` advances, it is rebased on the new tip and force-pushed. It contains no functional code changes and does not feed into the integration branch.
+* Each `fix-*`, `add-*` and single-feature branch is rebased on top of `master` and intended to be submittable as a self-contained PR. The upstream PR number, where one exists, is listed in the tables above and is the authoritative description of the patch.
+* The `local/merge-wasm32` / `local/merge-wasm64` integration branches are **local, ephemeral build artefacts**: rebuilt fresh from `master + feature branches` on every run of the merge script, and intentionally never pushed to the remote. The base branch `ruffle-enterprise` is kept out of that chain so the integration stays a pure "master + features" tree. They are not intended to be submitted upstream.
+* **Releases are published as tags**, not as branches. A release tag points at the validated tip of the corresponding integration branch (the exact naming standard is not yet fixed); it is immutable and is the correct reference for anyone wanting to check out a specific release build. Point-in-time input sets are additionally frozen under the immutable `snapshot-<tag>/*` namespace.
+* **Issues filed on this repository should concern this fork** — Flex enterprise workloads, the patches listed above, or release packaging. For upstream bugs unrelated to this scope, please file them on [ruffle-rs/ruffle/issues](https://github.com/ruffle-rs/ruffle/issues).
+
 
 ## Structure
 
-- `core` - core emulator and common code
-- `swf` - SWF and ActionScript parser
-- `desktop` - desktop client (uses `wgpu-rs`)
-- `web` - web client and browser extension (uses `wasm-bindgen`)
-- `render` - various rendering backends for both desktop and web
-- `video` - video decoding backends
-- `flv` - Flash Video decoder
-- `wstr` - a Flash-compatible implementation of strings
-- `scanner` - a utility to bulk parse SWF files
-- `exporter` - a utility to generate PNG screenshots of a SWF file
+The directory layout is unchanged from upstream, with two fork-specific additions (both present only on the `ruffle-enterprise` base branch):
 
-## Sponsors
+- `core` — core emulator and common code
+- `swf` — SWF and ActionScript parser
+- `desktop` — desktop client (uses `wgpu-rs`)
+- `web` — web client and browser extension (uses `wasm-bindgen`)
+- `render` — various rendering backends for both desktop and web
+- `video` — video decoding backends
+- `flv` — Flash Video decoder
+- `wstr` — a Flash-compatible implementation of strings
+- `scanner` — a utility to bulk parse SWF files
+- `exporter` — a utility to generate PNG screenshots of a SWF file
+- `scripts` — **(fork-specific)** branch automation: `Merge-Branches.ps1` (merge feature branches into the local integration branches), `Rebase-Branches.ps1` (restack them on an updated upstream master), `Tag-Snapshot.ps1` (freeze a point-in-time input set under `snapshot-<tag>/`)
+- `docs` — **(fork-specific)** per-branch design references (one self-contained HTML per feature branch), collected here so the feature branches and their upstream PRs stay code-only
 
-You can support the development of Ruffle via [GitHub Sponsors](https://github.com/sponsors/ruffle-rs). Your sponsorship will help to ensure the accessibility of Flash content for the future. Thank you!
-
-Sincere thanks to the diamond level sponsors of Ruffle:
-
-<p align="center">
-  <a href="https://www.newgrounds.com"><img src="https://ruffle.rs/sponsors/newgrounds.png" alt="Newgrounds.com"></a>
-  <a href="https://www.cpmstar.com"><img src="https://ruffle.rs/sponsors/cpmstar.png" alt="CPMStar"></a>
-  <a href="https://deepnight.net"><img src="https://ruffle.rs/sponsors/deepnight.png" alt="Sébastien Bénard"></a>
-  <a href="https://www.crazygames.com"><img src="https://ruffle.rs/sponsors/crazygames.png" alt="Crazy Games"></a>
-  <a href="https://www.coolmathgames.com"><img src="https://ruffle.rs/sponsors/coolmathgames.png" alt="Cool Math Games"></a>
-  <a href="https://www.nytimes.com/"><img src="https://ruffle.rs/sponsors/nyt.png" alt="The New York Times"></a>
-  <a href="https://www.armorgames.com/"><img src="https://ruffle.rs/sponsors/armorgames.png" alt="Armor Games"></a>
-  <a href="https://www.ondaeduca.com/"><img src="https://ruffle.rs/sponsors/ondaeduca.png" alt="Onda Educa"></a>
-  <a href="https://www.twoplayergames.org/"><img src="https://ruffle.rs/sponsors/twoplayergames.png" alt="TwoPlayerGames.org"></a>
-  <a href="https://www.wowgame.jp/"><img src="https://ruffle.rs/sponsors/wowgame.png" alt="wowgame.jp"></a>
-  <a href="http://kupogames.com/"><img src="https://ruffle.rs/sponsors/mattroszak.png" alt="Matt Roszak"></a>
-  <a href="https://www.dolldivine.com/"><img src="https://ruffle.rs/sponsors/dolldivine.png" alt="Doll Divine"></a>
-  <a href="https://movavi.com/"><img src="https://ruffle.rs/sponsors/movavi.svg" alt="Movavi"></a>
-  <a href="https://www.kongregate.com/"><img src="https://ruffle.rs/sponsors/kongregate.svg" alt="Kongregate"></a>
-  <a href="https://www.bubbleshooter.net/"><img src="https://ruffle.rs/sponsors/bubble-shooter.png" alt="Bubble Shooter"></a>
-  <a href="https://www.neopets.com/"><img src="https://ruffle.rs/sponsors/neopets.png" alt="Neopets"></a>
-</p>
 
 ## License
 
-Ruffle is licensed under either of
+This fork inherits the dual license from upstream Ruffle:
 
 - Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
 - MIT License (http://opensource.org/licenses/MIT)
@@ -177,12 +250,11 @@ at your option.
 
 Ruffle depends on third-party libraries under compatible licenses. See [LICENSE.md](LICENSE.md) for full information.
 
+
 ### Contributing
 
-Ruffle welcomes contribution from everyone. See [CONTRIBUTING.md](CONTRIBUTING.md) for help getting started.
+Contributions targeting the Flex enterprise scope are welcome on this repository. Generic patches — unrelated to Flex, MX/Spark components, heavy-XML workloads, wasm64, or the specific compatibility fixes above — should be submitted to [upstream Ruffle](https://github.com/ruffle-rs/ruffle) directly, where they reach the broader Ruffle audience and review process.
 
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in the work by you shall be dual licensed as above, without any
-additional terms or conditions.
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work shall be dual licensed as above, without any additional terms or conditions.
 
 The entire Ruffle community, including the chat room and GitHub project, is expected to abide by the [Code of Conduct](https://www.rust-lang.org/policies/code-of-conduct) that the Rust project itself follows.

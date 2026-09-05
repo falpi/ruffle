@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en" data-doc="xml-general-improvements">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>E4X / XML node optimizations</title>
+<style>
+  :root{
+    --bg:#ffffff; --surface:#f6f6f4; --surface2:#efeee9;
+    --text:#1d1d1b; --text2:#5f5e5a;
+    --border:#d3d1c7; --border2:#b4b2a9;
+    --accent:#534ab7; --accent-soft:#7f77dd;
+    --good:#1d9e75; --warn:#d85a30; --info:#378add;
+    --code-bg:#f1efe8;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#1a1a18; --surface:#242420; --surface2:#2c2c28;
+      --text:#ecece9; --text2:#b4b2a9;
+      --border:#444441; --border2:#5f5e5a;
+      --accent:#afa9ec; --accent-soft:#7f77dd;
+      --good:#5dcaa5; --warn:#f0997b; --info:#85b7eb;
+      --code-bg:#26261f;
+    }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:16px; line-height:1.65;
+  }
+  .wrap{max-width:900px; margin:0 auto; padding:48px 28px 96px}
+  header.doc{border-bottom:1px solid var(--border); padding-bottom:24px; margin-bottom:8px}
+  header.doc h1{font-size:30px; margin:0 0 6px; letter-spacing:-.01em}
+  header.doc .sub{color:var(--text2); font-size:15px}
+  header.doc .meta{color:var(--text2); font-size:13px; margin-top:14px}
+  header.doc .meta code{font-size:12px}
+  h2{font-size:23px; margin:52px 0 4px; letter-spacing:-.01em; scroll-margin-top:20px}
+  h2 .n{color:var(--accent); font-variant-numeric:tabular-nums; margin-right:10px}
+  h3{font-size:17px; margin:28px 0 4px}
+  p{margin:12px 0}
+  a{color:var(--accent)}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.88em;
+    background:var(--code-bg); padding:.12em .4em; border-radius:4px}
+  pre{background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+    padding:14px 16px; overflow:auto; font-size:13px; line-height:1.5}
+  pre code{background:none; padding:0}
+  .lead{font-size:18px; color:var(--text)}
+  ul,ol{padding-left:22px} li{margin:5px 0}
+  nav.toc{background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:18px 22px; margin:28px 0 8px}
+  nav.toc strong{display:block; font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--text2); margin-bottom:8px}
+  nav.toc ol{margin:0; columns:2; column-gap:32px}
+  nav.toc a{text-decoration:none; color:var(--text)}
+  nav.toc a:hover{color:var(--accent)}
+  .note{border-left:3px solid var(--accent); background:var(--surface);
+    padding:12px 16px; border-radius:0 8px 8px 0; margin:18px 0; font-size:15px}
+  .note.good{border-color:var(--good)}
+  .note.warn{border-color:var(--warn)}
+  .note .lbl{font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--text2); display:block; margin-bottom:2px}
+  .tag{display:inline-block; font-family:ui-monospace,monospace; font-size:11px; font-weight:600;
+    letter-spacing:.04em; color:var(--accent); border:1px solid var(--accent);
+    border-radius:5px; padding:1px 7px; margin-left:8px; vertical-align:middle}
+  figure{margin:24px 0; background:var(--surface); border:1px solid var(--border);
+    border-radius:10px; padding:20px}
+  figure svg{display:block; width:100%; height:auto}
+  figcaption{color:var(--text2); font-size:13px; margin-top:12px; text-align:center}
+  table{width:100%; border-collapse:collapse; margin:20px 0; font-size:14px}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:top}
+  th{font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--text2);
+    border-bottom:2px solid var(--border2)}
+  td.num,th.num{text-align:right; font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,monospace}
+  tr.sum td{font-weight:600; border-top:2px solid var(--border2); background:var(--surface)}
+  .neg{color:var(--warn); font-weight:600}
+  td code{white-space:nowrap}
+  svg text{font-family:ui-sans-serif,system-ui,sans-serif}
+  .s-ti{font-weight:600; fill:var(--text); font-size:14px}
+  .s-h{font-weight:600; fill:var(--text); font-size:12px}
+  .s-t{fill:var(--text); font-size:12px}
+  .s-s{fill:var(--text2); font-size:10px}
+  .s-mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+  .s-box{fill:var(--bg); stroke:var(--border2); stroke-width:1.5}
+  .s-surf{fill:var(--surface2); stroke:var(--border2); stroke-width:1.2}
+  .s-hi{fill:var(--accent); fill-opacity:.14; stroke:var(--accent); stroke-width:1.5}
+  .s-good{fill:var(--good); fill-opacity:.16; stroke:var(--good); stroke-width:1.5}
+  .s-warn{fill:var(--warn); fill-opacity:.16; stroke:var(--warn); stroke-width:1.5}
+  .s-line{stroke:var(--border2); stroke-width:1.5; fill:none}
+  .s-arrow{stroke:var(--accent); stroke-width:1.6; fill:none}
+  .s-acc{fill:var(--accent)} .s-good-f{fill:var(--good)} .s-warn-f{fill:var(--warn)}
+  .footer{margin-top:64px; padding-top:20px; border-top:1px solid var(--border);
+    color:var(--text2); font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <h1>E4X / XML node optimizations</h1>
+  <div class="sub">Shrinking Ruffle's mutable XML node footprint — six refinements, zero <code>unsafe</code>, public API unchanged.</div>
+  <div class="meta">
+    Ruffle · AVM2 / E4X &nbsp;·&nbsp; branch <code>xml-general-improvements</code> &nbsp;·&nbsp;
+    last updated 2026-06-21 &nbsp;·&nbsp; single self-contained file (every diagram is inline SVG, no external dependencies).
+  </div>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#motivation">Motivation</a></li>
+    <li><a href="#anatomy">Anatomy of an E4X node</a></li>
+    <li><a href="#footprint">What drives the footprint</a></li>
+    <li><a href="#boxed">BOXED — box the Element variant</a></li>
+    <li><a href="#intern">INTERN — intern payload strings</a></li>
+    <li><a href="#rare">RARE-FIELDS — box the node's rare fields</a></li>
+    <li><a href="#lazy-ns">LAZY-NS — lazy namespace list</a></li>
+    <li><a href="#lazy-attr">LAZY-ATTR — lazy attribute list</a></li>
+    <li><a href="#children-enum">CHILDREN-ENUM — single-child enum</a></li>
+    <li><a href="#results">Cumulative results</a></li>
+    <li><a href="#floor">wasm64 &amp; the safe floor</a></li>
+    <li><a href="#appendix">Appendix — commits &amp; abstractions</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="motivation"><span class="n">1</span>Motivation</h2>
+<p class="lead">
+  Ruffle's mutable <code>XML</code> type stores every node as its own <code>Gc</code> allocation
+  (an <code>E4XNode</code> wrapping <code>E4XNodeData</code>). On XML-heavy workloads the node tree is the
+  dominant memory consumer, and shaving bytes off the per-node record scales by tens of millions of nodes.
+</p>
+<p>
+  This branch applies six independent, behavior-preserving refinements to that record. They are all
+  <strong>internal representation changes</strong>: the E4X/XML public API and observable semantics are
+  unchanged, there is no <code>unsafe</code>, and each was validated A/B on a data-oriented workload. The
+  refinements fall into two groups by what they shrink:
+</p>
+<ul>
+  <li><strong>The node</strong> (<code>E4XNodeData</code>, paid by <em>every</em> node) — <span class="tag">BOXED</span> separates it from the element payload, then <span class="tag">INTERN</span> and <span class="tag">RARE-FIELDS</span> shrink it.</li>
+  <li><strong>The element payload</strong> (<code>E4XElementData</code>, paid only by elements) — <span class="tag">LAZY-NS</span>, <span class="tag">LAZY-ATTR</span> and <span class="tag">CHILDREN-ENUM</span> shrink it step by step.</li>
+</ul>
+<div class="note good">
+  <span class="lbl">Net result</span>
+  Measured end-to-end on a 250k-row workload, the six refinements take total live memory from
+  <strong>1425.6&nbsp;MB to 774.6&nbsp;MB — −651&nbsp;MB (−46%)</strong>, all with zero <code>unsafe</code> and an
+  unchanged API.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="anatomy"><span class="n">2</span>Anatomy of an E4X node</h2>
+<p>
+  An <code>E4XNode</code> is a <code>Gc</code> handle to an <code>E4XNodeData</code>. The data record holds the
+  fields shared by all node kinds — parent link, local name, and the <code>kind</code> — where
+  <code>kind</code> is an <code>E4XNodeKind</code> enum: leaf kinds (Text, CData, Comment, Processing
+  Instruction, Attribute) carry just an <code>AvmString</code>, while the <code>Element</code> kind carries
+  the attribute, child and namespace lists.
+</p>
+
+<figure>
+<svg viewBox="0 0 820 300" role="img" aria-labelledby="d1t d1d">
+  <title id="d1t">E4X node layout</title>
+  <desc id="d1d">An E4XNode is a Gc to an E4XNodeData; its kind enum is sized by the largest variant, Element, which holds three lists.</desc>
+  <text class="s-ti" x="20" y="24">E4XNode = Gc&lt;E4XNodeData&gt;</text>
+  <rect class="s-surf" x="20" y="36" width="360" height="150" rx="8"/>
+  <g class="s-mono" >
+    <rect class="s-box" x="36" y="52" width="328" height="24" rx="3"/>
+    <text class="s-t" x="46" y="69" font-size="11">parent : Option&lt;E4XNode&gt;</text>
+    <rect class="s-box" x="36" y="82" width="328" height="24" rx="3"/>
+    <text class="s-t" x="46" y="99" font-size="11">local_name : Option&lt;AvmString&gt;</text>
+    <rect class="s-hi" x="36" y="112" width="328" height="24" rx="3"/>
+    <text class="s-t" x="46" y="129" font-size="11">kind : RefLock&lt;E4XNodeKind&gt;</text>
+    <rect class="s-box" x="36" y="142" width="328" height="24" rx="3"/>
+    <text class="s-t" x="46" y="159" font-size="11">+ a couple of rarely-used fields</text>
+  </g>
+
+  <path class="s-arrow" d="M 384 124 L 430 124" marker-end="url(#a1)"/>
+  <defs><marker id="a1" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="var(--accent)"/></marker></defs>
+
+  <text class="s-ti" x="440" y="24">E4XNodeKind (enum)</text>
+  <g class="s-mono">
+    <rect class="s-box" x="440" y="36" width="360" height="22" rx="3"/>
+    <text class="s-t" x="450" y="51" font-size="11">Text / CData / Comment / PI / Attribute</text>
+    <text class="s-s" x="790" y="51" text-anchor="end">AvmString</text>
+    <rect class="s-warn" x="440" y="64" width="360" height="92" rx="3"/>
+    <text class="s-t" x="450" y="84" font-size="11">Element</text>
+    <text class="s-s" x="450" y="102">attributes : Vec&lt;E4XNode&gt;</text>
+    <text class="s-s" x="450" y="120">children&nbsp;&nbsp;&nbsp;: Vec&lt;E4XNode&gt;</text>
+    <text class="s-s" x="450" y="138">namespaces : Vec&lt;E4XNamespace&gt;</text>
+  </g>
+  <text class="s-warn-f" x="440" y="182" font-size="11">enum sized by its largest variant → every kind pays Element's 3 Vecs</text>
+</svg>
+<figcaption>Before <span class="tag">BOXED</span>: a Rust enum is as large as its biggest variant, so even a one-string leaf paid for three inline <code>Vec</code>s.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="footprint"><span class="n">3</span>What drives the footprint</h2>
+<p>
+  Each node is its own heap allocation, so the size of the per-node record is multiplied by the tens of
+  millions of nodes a large document holds. Two levers recur across the refinements below, and the measured
+  figures throughout this document are live heap memory (the sum of live allocations):
+</p>
+<ul>
+  <li><strong>Shrink the record</strong> — a smaller struct uses less memory on every node or element it
+    applies to. (General-purpose allocators round each request up to a granularity, so a byte reduction shows
+    up as a memory saving in steps; the measured deltas capture the real effect rather than the raw byte
+    count.)</li>
+  <li><strong>Remove the allocation</strong> — a list that is empty, or holds a single element, need not own a
+    separate heap buffer at all; eliminating it saves the buffer plus the cost of allocating, freeing and GC-
+    tracing it.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="boxed"><span class="n">4</span>BOXED — box the Element variant<span class="tag">dce407d2</span></h2>
+<p>
+  <strong>Problem.</strong> <code>E4XNodeKind</code> is sized for its largest variant, <code>Element</code>,
+  which holds three <code>Vec</code>s (attributes, children, namespaces). Every node therefore carried that
+  three-<code>Vec</code> footprint inline regardless of kind — including the leaf Text/CData/Comment/PI/
+  Attribute nodes, which only need a single <code>AvmString</code> and which typically vastly outnumber
+  elements in data-oriented XML (measured leaf fraction ≈ 49%).
+</p>
+<p>
+  <strong>Change.</strong> Move the Element payload into a heap-allocated <code>E4XElementData</code>, so the
+  variant becomes a single pointer: <code>Element(Box&lt;E4XElementData&gt;)</code>. Every non-element node
+  then shrinks by the size of the three <code>Vec</code>s (on wasm32 the node drops from ~68 to ~36 bytes);
+  element nodes pay one extra allocation and one indirection to reach their lists. <code>Box&lt;T: Collect&gt;</code>
+  is traced by gc-arena with no extra GC header. ~70 call sites across 5 files, bodies kept identical by
+  matching <code>Element(elem)</code> and using <code>elem.field</code>.
+</p>
+
+<figure>
+<svg viewBox="0 0 820 210" role="img" aria-labelledby="d3t d3d">
+  <title id="d3t">Boxing the Element variant</title>
+  <desc id="d3d">Before: every node is 68 bytes with three inline Vecs. After: leaves are 36 bytes and elements hold a boxed payload.</desc>
+  <text class="s-ti" x="20" y="24">Before</text>
+  <rect class="s-warn" x="20" y="36" width="360" height="40" rx="6"/>
+  <text class="s-t" x="200" y="55" text-anchor="middle">every node (leaf or element)</text>
+  <text class="s-mono s-warn-f" x="200" y="70" text-anchor="middle" font-size="11">~68 B — 3 inline Vecs always</text>
+
+  <text class="s-ti" x="20" y="116">After</text>
+  <rect class="s-good" x="20" y="128" width="150" height="40" rx="6"/>
+  <text class="s-t" x="95" y="147" text-anchor="middle">leaf node</text>
+  <text class="s-mono s-good-f" x="95" y="162" text-anchor="middle" font-size="11">~36 B</text>
+  <rect class="s-box" x="200" y="128" width="150" height="40" rx="6"/>
+  <text class="s-t" x="275" y="147" text-anchor="middle">element node</text>
+  <text class="s-mono s-s" x="275" y="162" text-anchor="middle" font-size="11">~36 B + Box ptr</text>
+  <path class="s-arrow" d="M 350 148 L 400 148" marker-end="url(#a3)"/>
+  <defs><marker id="a3" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="var(--accent)"/></marker></defs>
+  <rect class="s-surf" x="400" y="120" width="240" height="56" rx="6"/>
+  <text class="s-mono s-t" x="412" y="139" font-size="11">E4XElementData (heap)</text>
+  <text class="s-s" x="412" y="156">attributes · children · namespaces</text>
+  <text class="s-s" x="660" y="150">leaves (≈49%)</text>
+  <text class="s-s" x="660" y="164">stop paying for 3 Vecs</text>
+</svg>
+<figcaption>The enum collapses to a pointer for elements; leaf nodes shed the three <code>Vec</code>s entirely.</figcaption>
+</figure>
+
+<p>
+  <strong>Measured (250k workload): total live memory 1425.6 → 1222.4&nbsp;MB (−203&nbsp;MB).</strong> The
+  ~10.9M leaf nodes each drop from ~68 to ~36 bytes.
+</p>
+<div class="note">
+  <span class="lbl">Reading the numbers</span>
+  WASM linear memory has no <code>memory.shrink</code>, so a footprint win shows up as higher free headroom,
+  not a lower total memory size. Measure live allocations, not total reserved memory.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="intern"><span class="n">5</span>INTERN — intern payload strings on parse<span class="tag">4b83812f</span></h2>
+<p>
+  <strong>Problem.</strong> Element and attribute local names already went through the
+  <code>AvmStringInterner</code>, but the remaining E4X payload strings did not: text/CData/comment text,
+  processing-instruction targets and values, attribute values, and namespace URIs/prefixes. In data-oriented
+  XML these repeat heavily (the same status codes, flags and column values on every row), so each duplicate
+  spawned its own <code>AvmStringRepr</code> allocation.
+</p>
+<p>
+  <strong>Change.</strong> Route those payloads through the interner on parse. Value-like payloads pass
+  through a <strong>64-byte length cap</strong> so the intern table stays tight on free-text-heavy XML, while
+  name-like payloads (PI targets, namespace URI/prefix) are always interned since their cardinality is bounded
+  per document. Many duplicate <code>AvmStringRepr</code> allocations collapse onto shared interner entries.
+  No effect on the public API or on string lifetimes — the interner holds weak references and stale entries
+  are pruned automatically at GC trace.
+</p>
+<div class="note good">
+  <span class="lbl">Measured (250k workload)</span>
+  A far bigger win than its diff size suggests — second only to <span class="tag">BOXED</span>: total live
+  memory <strong>1222.4 → 1053.6&nbsp;MB (−169&nbsp;MB)</strong>. Duplicate string allocations collapse onto
+  shared interner entries; the smallest string allocations alone drop from 4.38M to 1.28M live.
+</div>
+<div class="note">
+  <span class="lbl">Why a length cap</span>
+  Interning is a win only when strings recur. Short value-like strings (codes, flags) recur constantly;
+  long free text is usually unique, so interning it would only bloat the table. The 64-byte cap keeps the
+  table to the strings that actually dedupe.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="rare"><span class="n">6</span>RARE-FIELDS — box the node's rare fields<span class="tag">53dfa85a</span></h2>
+<p>
+  <strong>Problem.</strong> Two node-level fields — the node's own <code>namespace</code> and its
+  <code>notification</code> watcher — are unset on the overwhelming majority of nodes (no namespace, no E4X
+  change watcher) yet cost ~12&nbsp;B of inline storage on <em>every</em> node.
+</p>
+<p>
+  <strong>Change.</strong> Move both into a side-allocated <code>Gc&lt;E4XRareData&gt;</code> referenced from a
+  single <code>Lock&lt;Option&lt;Gc&lt;…&gt;&gt;&gt;</code> slot, allocated lazily the first time either field is
+  set. Nodes that never use either now pay one pointer instead of two inline option values, shrinking the
+  common <code>E4XNodeData</code> record.
+</p>
+
+<figure>
+<svg viewBox="0 0 820 160" role="img" aria-labelledby="d4t d4d">
+  <title id="d4t">Boxing rare node fields</title>
+  <desc id="d4d">Two rarely-used inline option fields are replaced by one lazily-allocated side pointer.</desc>
+  <text class="s-ti" x="20" y="24">Before</text>
+  <rect class="s-warn" x="20" y="36" width="170" height="24" rx="3"/>
+  <text class="s-mono s-t" x="28" y="53" font-size="11">namespace: Option</text>
+  <rect class="s-warn" x="20" y="64" width="170" height="24" rx="3"/>
+  <text class="s-mono s-t" x="28" y="81" font-size="11">notification: Option</text>
+  <text class="s-warn-f s-s" x="20" y="106">~12 B inline on every node</text>
+
+  <path class="s-arrow" d="M 210 62 L 320 62" marker-end="url(#a4r)"/>
+  <defs><marker id="a4r" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="var(--accent)"/></marker></defs>
+
+  <text class="s-ti" x="340" y="24">After</text>
+  <rect class="s-good" x="340" y="44" width="240" height="24" rx="3"/>
+  <text class="s-mono s-t" x="348" y="61" font-size="11">rare: Lock&lt;Option&lt;Gc&lt;…&gt;&gt;&gt;</text>
+  <text class="s-good-f s-s" x="340" y="88">one pointer, allocates nothing when unused</text>
+  <path class="s-arrow" d="M 582 56 C 620 56, 630 56, 660 56" marker-end="url(#a4r)" stroke-dasharray="3 3"/>
+  <rect class="s-surf" x="660" y="44" width="150" height="40" rx="6"/>
+  <text class="s-mono s-s" x="668" y="62" font-size="10">Gc&lt;E4XRareData&gt;</text>
+  <text class="s-s" x="668" y="77">lazy, only if used</text>
+</svg>
+<figcaption>The two rarely-set fields move off the hot record, shrinking the common node.</figcaption>
+</figure>
+<p>
+  Measured (250k workload): total live memory <strong>1053.6 → 971.3&nbsp;MB (−82&nbsp;MB)</strong>.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="lazy-ns"><span class="n">7</span>LAZY-NS — lazy namespace list<span class="tag">b753d358</span></h2>
+<p>
+  <strong>Problem.</strong> An element's <code>namespaces</code> declaration list was an inline <code>Vec</code>
+  (three pointers). Almost every element in typical data XML — every non-root node — declares no namespaces,
+  yet paid for the inline <code>Vec</code> regardless.
+</p>
+<p>
+  <strong>Change.</strong> <code>Vec</code> → <code>Option&lt;Box&lt;Vec&lt;E4XNamespace&gt;&gt;&gt;</code>. When
+  empty it is a single niche-optimized pointer (<code>None</code>, allocating nothing), shrinking
+  <code>E4XElementData</code> by 8&nbsp;bytes (36 → 28&nbsp;B) <em>and</em> removing the empty-list allocation
+  in the common case. The list is materialized (<code>get_or_insert_with</code>) only on the rare
+  <code>addNamespace</code> path; reads and removals treat <code>None</code> as empty. The intentional
+  <code>Box&lt;Vec&gt;</code> carries an explicit <code>#[allow(clippy::box_collection)]</code>.
+  <strong>Measured: −35&nbsp;MB</strong> (892.6 → 857.5&nbsp;MB).
+</p>
+<p style="color:var(--text2);font-size:14px">Note: this is the element's <em>declared namespace list</em>, distinct from the node's own <code>namespace</code> field moved by <span class="tag">RARE-FIELDS</span>.</p>
+
+<!-- ============================================================ -->
+<h2 id="lazy-attr"><span class="n">8</span>LAZY-ATTR — lazy attribute list<span class="tag">589f4e67</span></h2>
+<p>
+  <strong>Problem &amp; change.</strong> The same lazy-boxing applied to an element's <code>attributes</code>:
+  <code>Vec</code> → <code>Option&lt;Box&lt;Vec&lt;E4XNode&gt;&gt;&gt;</code>. Elements with no attributes (common
+  in data XML) now store a single niche pointer instead of an inline empty <code>Vec</code>, shrinking
+  <code>E4XElementData</code> by another 8&nbsp;bytes (28 → 20&nbsp;B).
+</p>
+<p>
+  Reads go through a new <code>E4XElementData::attributes()</code> accessor that returns a slice (empty when
+  <code>None</code>); the shared <code>remove_matching_nodes</code> helper gains an
+  <code>E4XNodeContainer</code> impl for the boxed-option type; the list is materialized only on the mutating
+  add path (<code>setAttribute</code>). <strong>Measured: −46&nbsp;MB</strong> (857.5 → 811.1&nbsp;MB).
+</p>
+
+<!-- ============================================================ -->
+<h2 id="children-enum"><span class="n">9</span>CHILDREN-ENUM — single-child enum<span class="tag">b30a3963</span></h2>
+<p>
+  <strong>Problem.</strong> The single-child element (e.g. <code>&lt;col&gt;text&lt;/col&gt;</code>) is the
+  dominant shape in data-heavy XML, yet a plain <code>Vec</code> allocated a separate heap buffer just to hold
+  that one child. An intermediate step (<span class="tag">54a2fb0a</span>) first replaced the <code>Vec</code>
+  with <code>SmallVec&lt;[E4XNode; 1]&gt;</code> to inline the single child (mirroring avmplus's
+  <code>SINGLECHILDBIT</code>), removing those one-element child-buffer allocations — on its own worth
+  <strong>−79&nbsp;MB</strong> (971.3 → 892.6&nbsp;MB) by eliminating ~5.3M separate child buffers. But a
+  <code>SmallVec&lt;[_; 1]&gt;</code> is three words wide, so it did not shrink the element record itself.
+</p>
+<p>
+  <strong>Change.</strong> Replace the <code>SmallVec</code> with a purpose-built <code>E4XChildren</code>
+  enum — <code>Empty | One(E4XNode) | Many(Box&lt;Vec&gt;)</code> — which is a pointer plus a discriminant
+  (two words). It preserves the no-allocation single-child case while shrinking <code>E4XElementData</code> to
+  16&nbsp;B (20 → 16&nbsp;B). <code>Deref&lt;Target = [E4XNode]&gt;</code>, <code>IntoIterator</code> and
+  <code>FromIterator</code> provide the whole read/iteration API, so call sites are unchanged; mutation goes
+  through inherent <code>push</code>/<code>insert</code>/<code>remove</code>/<code>retain</code>/<code>clear</code>
+  that maintain the <code>Empty</code>/<code>One</code>/<code>Many</code> invariant (collapsing back on
+  removal). A compile-time assertion guards the resulting struct size. <strong>Measured: −37&nbsp;MB</strong>
+  (811.1 → 774.6&nbsp;MB).
+</p>
+
+<figure>
+<svg viewBox="0 0 820 180" role="img" aria-labelledby="d5t d5d">
+  <title id="d5t">The E4XChildren enum</title>
+  <desc id="d5d">Empty stores nothing, One stores the child inline with no allocation, Many boxes the vector.</desc>
+  <g>
+    <rect class="s-box" x="20" y="50" width="230" height="70" rx="8"/>
+    <text class="s-h" x="135" y="44" text-anchor="middle">Empty</text>
+    <text class="s-s" x="135" y="90" text-anchor="middle">no children, no allocation</text>
+  </g>
+  <g>
+    <rect class="s-good" x="295" y="50" width="230" height="70" rx="8"/>
+    <text class="s-h" x="410" y="44" text-anchor="middle">One(E4XNode)</text>
+    <text class="s-s" x="410" y="84" text-anchor="middle">single child inline</text>
+    <text class="s-good-f" x="410" y="102" text-anchor="middle" font-size="11">no allocation — the common case</text>
+  </g>
+  <g>
+    <rect class="s-box" x="570" y="50" width="230" height="70" rx="8"/>
+    <text class="s-h" x="685" y="44" text-anchor="middle">Many(Box&lt;Vec&gt;)</text>
+    <text class="s-s" x="685" y="84" text-anchor="middle">two or more children</text>
+    <text class="s-s" x="685" y="102" text-anchor="middle">heap vector, as before</text>
+  </g>
+  <text class="s-s" x="20" y="150">Two words (pointer + discriminant). A safe 8-byte enum is as small here as an unsafe tagged pointer would be — so no <tspan class="s-mono">unsafe</tspan> is needed.</text>
+</svg>
+<figcaption>Single-child elements allocate nothing for their child list, and the element record shrinks further.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="results"><span class="n">10</span>Cumulative results</h2>
+<p>
+  The element payload shrinks step by step as each lazy/compact representation lands:
+</p>
+
+<figure>
+<svg viewBox="0 0 820 220" role="img" aria-labelledby="d6t d6d">
+  <title id="d6t">Element payload shrinking from 36 to 16 bytes</title>
+  <desc id="d6d">E4XElementData goes from 36 to 16 bytes across lazy-ns, lazy-attr and children-enum.</desc>
+  <text class="s-s" x="20" y="40">baseline</text>
+  <rect class="s-box" x="120" y="28" width="360" height="22" rx="3"/>
+  <text class="s-mono s-t" x="124" y="44" font-size="10">attributes · children · namespaces (3 Vecs)</text>
+  <text class="s-mono s-s" x="500" y="44">36 B</text>
+  <text class="s-s" x="20" y="80">LAZY-NS</text>
+  <rect class="s-hi" x="120" y="68" width="280" height="22" rx="3"/>
+  <text class="s-mono s-t" x="124" y="84" font-size="10">…namespaces → Option&lt;Box&gt;</text>
+  <text class="s-mono s-s" x="500" y="84">28 B</text>
+  <text class="s-s" x="20" y="120">LAZY-ATTR</text>
+  <rect class="s-hi" x="120" y="108" width="200" height="22" rx="3"/>
+  <text class="s-mono s-t" x="124" y="124" font-size="10">…attributes → Option&lt;Box&gt;</text>
+  <text class="s-mono s-s" x="500" y="124">20 B</text>
+  <text class="s-s" x="20" y="160">CHILDREN-ENUM</text>
+  <rect class="s-good" x="120" y="148" width="160" height="22" rx="3"/>
+  <text class="s-mono s-t" x="124" y="164" font-size="10">…children → enum (2 words)</text>
+  <text class="s-mono s-good-f" x="500" y="164">16 B</text>
+  <line x1="120" y1="184" x2="640" y2="184" class="s-line"/>
+  <text class="s-good-f" x="120" y="202" font-size="12">E4XElementData: 36 → 16 B (−56%)</text>
+</svg>
+<figcaption>Each lazy field also removes its empty-list allocation in the common case; the enum keeps the single-child case allocation-free.</figcaption>
+</figure>
+
+<p>
+  The full picture across all six refinements, on the same 250k-row workload (total live heap memory):
+</p>
+<table>
+  <thead><tr><th>Stage</th><th class="num">Total live (MB)</th><th class="num">Δ</th></tr></thead>
+  <tbody>
+    <tr><td>Original</td><td class="num">1425.6</td><td class="num">—</td></tr>
+    <tr><td>+ BOXED</td><td class="num">1222.4</td><td class="num neg">−203</td></tr>
+    <tr><td>+ INTERN</td><td class="num">1053.6</td><td class="num neg">−169</td></tr>
+    <tr><td>+ RARE-FIELDS</td><td class="num">971.3</td><td class="num neg">−82</td></tr>
+    <tr><td>+ inline single child</td><td class="num">892.6</td><td class="num neg">−79</td></tr>
+    <tr><td>+ LAZY-NS</td><td class="num">857.5</td><td class="num neg">−35</td></tr>
+    <tr><td>+ LAZY-ATTR</td><td class="num">811.1</td><td class="num neg">−46</td></tr>
+    <tr><td>+ CHILDREN-ENUM</td><td class="num">774.6</td><td class="num neg">−37</td></tr>
+    <tr class="sum"><td>Cumulative</td><td class="num">1425.6 → 774.6</td><td class="num neg">−651 (−46%)</td></tr>
+  </tbody>
+</table>
+<p>
+  Two things stand out: <span class="tag">BOXED</span> and <span class="tag">INTERN</span> are the heavy
+  hitters (−203 and −169&nbsp;MB), and the inline-single-child step removes ~5.3M separate child-buffer
+  allocations without shrinking the element record at all. The remaining ~775&nbsp;MB is dominated by the
+  document's actual text content, which interning cannot dedupe away.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="floor"><span class="n">11</span>wasm64 &amp; the safe floor</h2>
+<p>
+  <strong>wasm64.</strong> With 64-bit pointers the records are wider, so the absolute byte sizes differ
+  (e.g. the boxed leaf node is ~56&nbsp;B rather than ~36&nbsp;B), but the same structural wins apply — and the
+  relative pressure from the node tree is, if anything, higher.
+</p>
+<p>
+  <strong>The safe floor.</strong> After these six refinements the remaining large target is the per-node
+  <code>E4XNodeData</code> record itself, paid by tens of millions of nodes. Shrinking it further would
+  require, <em>in tandem</em>, removing the <code>RefCell</code> borrow flag from <code>kind</code>
+  <strong>and</strong> merging <code>local_name</code> with the rare-field pointer into one tagged slot (the
+  avmplus <code>m_nameOrAux</code> idea) — either change alone is too small to lower the record's actual
+  allocation, and done together they force unsafe pointer-tagging and nested GC write-barriers, i.e. a
+  GC-soundness risk. This branch deliberately stops at the safe floor: every refinement here is
+  representation-only, with no <code>unsafe</code> and no correctness risk.
+</p>
+<div class="note">
+  <span class="lbl">Time vs. memory</span>
+  Parse time is essentially unchanged across all six refinements — it is dominated by the number of
+  <code>Gc::new</code> calls, GC tracing and interning, not by per-node bytes. Reducing parse <em>time</em>
+  would require reducing the node <em>count</em>, a different axis from this branch's footprint work.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="appendix"><span class="n">A</span>Appendix — commits &amp; abstractions</h2>
+<p>Each refinement is a separate, self-contained commit. The history reads top-to-bottom in apply order.</p>
+<table>
+  <thead><tr><th>Commit</th><th>Files</th><th>Change</th></tr></thead>
+  <tbody>
+    <tr><td><span class="tag">BOXED</span><br><code>dce407d2</code></td><td><code>e4x.rs</code>, <code>globals/xml.rs</code>, <code>globals/xml_list.rs</code>, <code>object/xml_list_object.rs</code>, <code>object/xml_object.rs</code></td><td>Move the <code>Element</code> payload into a heap <code>E4XElementData</code> so <code>E4XNodeKind::Element</code> becomes a single pointer; leaf nodes shed three inline <code>Vec</code>s.</td></tr>
+    <tr><td><span class="tag">INTERN</span><br><code>4b83812f</code></td><td><code>e4x.rs</code></td><td>Intern the remaining payload strings on parse (text/CData/comment, PI target/value, attribute values, namespace URI/prefix), with a 64-byte cap on value-like strings.</td></tr>
+    <tr><td><span class="tag">RARE-FIELDS</span><br><code>53dfa85a</code></td><td><code>e4x.rs</code></td><td>Move the node's <code>namespace</code> and <code>notification</code> fields into a lazily-allocated <code>Gc&lt;E4XRareData&gt;</code> behind one <code>Lock&lt;Option&lt;Gc&gt;&gt;</code> slot.</td></tr>
+    <tr><td>inline child<br><code>54a2fb0a</code></td><td><code>e4x.rs</code>, <code>object/xml_object.rs</code></td><td>Children <code>Vec</code> → <code>SmallVec&lt;[E4XNode; 1]&gt;</code>: no child-buffer allocation for single-child elements. Superseded in record size by CHILDREN-ENUM.</td></tr>
+    <tr><td><span class="tag">LAZY-NS</span><br><code>b753d358</code></td><td><code>e4x.rs</code>, <code>globals/xml.rs</code></td><td>Element <code>namespaces</code> <code>Vec</code> → <code>Option&lt;Box&lt;Vec&gt;&gt;</code>; empty = one niche pointer. <code>E4XElementData</code> 36 → 28 B.</td></tr>
+    <tr><td><span class="tag">LAZY-ATTR</span><br><code>589f4e67</code></td><td><code>e4x.rs</code>, <code>globals/xml.rs</code>, <code>globals/xml_list.rs</code>, <code>object/xml_object.rs</code></td><td>Element <code>attributes</code> <code>Vec</code> → <code>Option&lt;Box&lt;Vec&gt;&gt;</code> with an <code>attributes()</code> slice accessor. 28 → 20 B.</td></tr>
+    <tr><td><span class="tag">CHILDREN-ENUM</span><br><code>b30a3963</code></td><td><code>e4x.rs</code></td><td>Children <code>SmallVec</code> → <code>E4XChildren { Empty, One, Many(Box&lt;Vec&gt;) }</code> (two words). 20 → 16 B. Compile-time size assertion.</td></tr>
+  </tbody>
+</table>
+
+<h3>Key abstractions introduced</h3>
+<ul>
+  <li><code>E4XElementData</code> — the boxed element payload (attributes, children, namespaces) behind <code>E4XNodeKind::Element(Box&lt;…&gt;)</code>.</li>
+  <li><code>E4XRareData</code> — side record for the node's rarely-set <code>namespace</code> and <code>notification</code>, reached through one lazy <code>Lock&lt;Option&lt;Gc&gt;&gt;</code> slot.</li>
+  <li><code>E4XChildren</code> — the <code>Empty</code>/<code>One</code>/<code>Many</code> child container with <code>Deref&lt;[E4XNode]&gt;</code> + <code>IntoIterator</code> + <code>FromIterator</code>, so read sites are untouched.</li>
+  <li><code>E4XNodeContainer</code> — a small private trait that lets <code>remove_matching_nodes</code> work uniformly over <code>Vec</code>, <code>SmallVec</code> and <code>Option&lt;Box&lt;Vec&gt;&gt;</code> (abstracting the <code>retain</code> closure signature difference).</li>
+  <li><code>E4XElementData::attributes()</code> — slice accessor returning <code>&amp;[]</code> when the lazy list is <code>None</code>.</li>
+  <li>Target-conditional <code>const _</code> size assertions on <code>E4XChildren</code> / <code>E4XElementData</code> guard the byte budget at compile time.</li>
+</ul>
+
+<div class="footer">
+  Self-contained document — no external dependencies (all diagrams are inline SVG). Light/dark theme follows
+  <code>prefers-color-scheme</code>. Editable directly as a text file. Companion document:
+  <code>xml-readonly-improvements.html</code> (the immutable read-only XML type).
+</div>
+
+</div>
+</body>
+</html>

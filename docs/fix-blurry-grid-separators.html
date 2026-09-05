@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en" data-doc="fix-blurry-grid-separators">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crisp Hairline Rendering — Ruffle</title>
+<style>
+  :root{
+    --bg:#ffffff; --surface:#f6f6f4; --surface2:#efeee9;
+    --text:#1d1d1b; --text2:#5f5e5a;
+    --border:#d3d1c7; --border2:#b4b2a9;
+    --accent:#534ab7; --accent-soft:#7f77dd;
+    --good:#1d9e75; --warn:#d85a30; --info:#378add;
+    --code-bg:#f1efe8;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#1a1a18; --surface:#242420; --surface2:#2c2c28;
+      --text:#ecece9; --text2:#b4b2a9;
+      --border:#444441; --border2:#5f5e5a;
+      --accent:#afa9ec; --accent-soft:#7f77dd;
+      --good:#5dcaa5; --warn:#f0997b; --info:#85b7eb;
+      --code-bg:#26261f;
+    }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:16px; line-height:1.65;
+  }
+  .wrap{max-width:900px; margin:0 auto; padding:48px 28px 96px}
+  header.doc{border-bottom:1px solid var(--border); padding-bottom:24px; margin-bottom:8px}
+  header.doc h1{font-size:30px; margin:0 0 6px; letter-spacing:-.01em}
+  header.doc .sub{color:var(--text2); font-size:15px}
+  header.doc dl{display:grid; grid-template-columns:max-content 1fr; gap:2px 16px; margin:18px 0 0; font-size:13px}
+  header.doc dt{color:var(--text2); text-transform:uppercase; letter-spacing:.05em; font-size:11px; padding-top:2px}
+  header.doc dd{margin:0}
+  header.doc code{font-size:12px}
+  h2{font-size:23px; margin:52px 0 4px; letter-spacing:-.01em; scroll-margin-top:20px}
+  h2 .n{color:var(--accent); font-variant-numeric:tabular-nums; margin-right:10px}
+  h3{font-size:17px; margin:30px 0 4px; scroll-margin-top:20px}
+  h4{font-size:15px; margin:22px 0 2px; color:var(--text)}
+  p{margin:12px 0}
+  a{color:var(--accent)}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86em;
+    background:var(--code-bg); padding:.12em .4em; border-radius:4px}
+  pre{background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+    padding:14px 16px; overflow:auto; font-size:12.5px; line-height:1.5}
+  pre code{background:none; padding:0; font-size:inherit}
+  .lead{font-size:18px; color:var(--text)}
+  ul,ol{padding-left:22px} li{margin:5px 0}
+  nav.toc{background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:18px 22px; margin:28px 0 8px}
+  nav.toc strong{display:block; font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--text2); margin-bottom:8px}
+  /* The entry text carries its own hardcoded numbering ("1.", "1.1", …),
+     so the list markers are suppressed. Single column: the list is
+     slightly indented from the "Contents" label, and nested lists are
+     indented further under their section. */
+  nav.toc ol{list-style:none; margin:0; padding:0; font-size:14px}
+  nav.toc > ol{padding-left:24px}
+  nav.toc ol ol{padding-left:18px; margin-top:2px}
+  nav.toc a{text-decoration:none; color:var(--text)}
+  nav.toc a:hover{color:var(--accent)}
+  .note{border-left:3px solid var(--accent); background:var(--surface);
+    padding:12px 16px; border-radius:0 8px 8px 0; margin:18px 0; font-size:15px}
+  .note .lbl{font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--text2); display:block; margin-bottom:2px}
+  figure{margin:24px 0; background:var(--surface); border:1px solid var(--border);
+    border-radius:10px; padding:20px}
+  figure svg{display:block; width:100%; height:auto}
+  figcaption{color:var(--text2); font-size:13px; margin-top:12px; text-align:center}
+  table{width:100%; border-collapse:collapse; margin:20px 0; font-size:14px}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:top}
+  th{font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--text2);
+    border-bottom:2px solid var(--border2)}
+  td code{white-space:nowrap}
+  .footer{margin-top:64px; padding-top:20px; border-top:1px solid var(--border);
+    color:var(--text2); font-size:13px}
+  svg text{font-family:ui-sans-serif,system-ui,sans-serif}
+  .s-h{font-weight:600; fill:var(--text); font-size:12px}
+  .s-t{fill:var(--text); font-size:11px}
+  .s-s{fill:var(--text2); font-size:9px}
+  .s-mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+  .s-box{fill:var(--bg); stroke:var(--border2); stroke-width:1.4}
+  .s-hi{fill:var(--accent); fill-opacity:.13; stroke:var(--accent); stroke-width:1.6}
+  .s-acc{fill:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <h1>Crisp Hairline Rendering</h1>
+  <div class="sub">Why 1px lines rendered blurry, and the three fixes that make them pixel-crisp.</div>
+  <dl>
+    <dt>Project</dt><dd>Ruffle — Flash Player emulator (Rust + WebAssembly)</dd>
+    <dt>Branch</dt><dd><code>fix-blurry-grid-separators</code> (upstream PR <a href="https://github.com/ruffle-rs/ruffle/pull/23837">#23837</a>, fixes issue #23814)</dd>
+    <dt>Commits</dt><dd><code>core: Snap 1px orthogonal strokes to the pixel grid at render time</code> · <code>render: Emulate line primitives on the GL backend</code></dd>
+    <dt>Footprint</dt><dd>5 files, +483/−74 — <code>core/src/drawing.rs</code>, <code>core/src/display_object.rs</code>, <code>core/src/display_object/graphic.rs</code>, <code>render/wgpu/src/surface/commands.rs</code>, <code>render/webgl/src/lib.rs</code></dd>
+    <dt>Audience</dt><dd>Maintainers, reviewers, anyone chasing sub-pixel rendering differences vs Flash Player</dd>
+    <dt>Scope</dt><dd>ActionScript drawing API strokes, cacheAsBitmap subtrees, and <code>draw_line</code> primitives. SWF-embedded shapes are deliberately untouched.</dd>
+  </dl>
+</header>
+
+<p style="margin-top:22px" class="lead">
+  Flash Player renders a 1-pixel line drawn with <code>graphics.lineStyle(1, color)</code> +
+  <code>moveTo</code>/<code>lineTo</code> as a crisp, single-pixel-wide run of solid color — even with
+  <code>pixelHinting=false</code>, which is the default. Ruffle rendered the same line smeared across two
+  pixel rows or columns at roughly 50% alpha. This document explains where that difference comes from,
+  why it appears and disappears depending on where a container happens to sit, why the obvious fixes
+  don't survive contact with real Flex/Spark content, and how the three fixes on this branch close the
+  gap for every ActionScript-drawn case found so far.
+</p>
+
+<nav class="toc" aria-label="Contents">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#symptom">1. The symptom</a>
+      <ol>
+        <li><a href="#where">1.1 Where it appears</a></li>
+        <li><a href="#heisenberg">1.2 Why it comes and goes</a></li>
+      </ol>
+    </li>
+    <li><a href="#background">2. Rasterization background</a>
+      <ol>
+        <li><a href="#centered">2.1 Strokes are centered on the path</a></li>
+        <li><a href="#sources">2.2 The two sources of misalignment</a></li>
+        <li><a href="#flash">2.3 What Flash Player does</a></li>
+      </ol>
+    </li>
+    <li><a href="#lessons">3. Lessons from the first iteration</a></li>
+    <li><a href="#fix1">4. Fix 1 — screen-space per-run stroke snapping</a>
+      <ol>
+        <li><a href="#runs">4.1 Render units and runs</a></li>
+        <li><a href="#qualify">4.2 What qualifies for snapping</a></li>
+        <li><a href="#math">4.3 The snap itself</a></li>
+        <li><a href="#gate">4.4 The rigidity gate</a></li>
+        <li><a href="#props">4.5 Properties and costs</a></li>
+      </ol>
+    </li>
+    <li><a href="#fix2">5. Fix 2 — cacheAsBitmap bounds snap</a></li>
+    <li><a href="#fix3">6. Fix 3 — GL line-primitive emulation</a></li>
+    <li><a href="#coverage">7. Coverage</a></li>
+    <li><a href="#testing">8. Testing</a></li>
+    <li><a href="#appendix">Appendix A. Design notes &amp; rejected approaches</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="symptom"><span class="n">1</span>The symptom</h2>
+
+<h3 id="where">1.1 Where it appears</h3>
+<p>
+  Blurry 1px lines were reported and reproduced across superficially unrelated pieces of Flex/Spark UI.
+  They all reduce to the same three underlying mechanisms, which is why they are fixed together on this
+  branch:
+</p>
+<ul>
+  <li><strong><code>mx:DataGrid</code> / <code>mx:AdvancedDataGrid</code> separators.</strong> The Flex SDK
+    draws horizontal grid lines with a stroke (<code>lineStyle(1)</code> + <code>lineTo</code>) and vertical
+    ones with a 1px <code>drawRect</code> fill, into the same <code>linesBody</code> graphics, inside a
+    <code>lines</code> sprite that the SDK marks <code>cacheAsBitmap = true</code>. Enabling
+    <code>horizontalGridLines</code> made <em>every</em> separator blurry, including the fill-based vertical
+    ones that were crisp without it (§5 explains why).</li>
+  <li><strong>Spark <code>&lt;s:Line&gt;</code> with <code>SolidColorStroke weight="1"</code>.</strong> Both
+    standalone separators and the column/header/row separators of <code>s:DataGrid</code>, which are
+    <code>&lt;s:Line&gt;</code> GraphicElements drawn into a shared canvas sprite at their own layout
+    offsets.</li>
+  <li><strong>1px <code>&lt;s:Rect&gt;</code> stroke borders</strong> in Spark skins (e.g. a ComboBox border),
+    i.e. rectangle outlines mixing horizontal and vertical segments in a single path.</li>
+  <li><strong>Text carets, underlines, and device text field borders</strong>, which do not go through the
+    drawing API at all but through the renderer's <code>draw_line</code> primitive (§6).</li>
+</ul>
+
+<h3 id="heisenberg">1.2 Why it comes and goes</h3>
+<p>
+  The most confusing property of the bug: the same component could render crisp or blurry depending on
+  where it sat, and dragging a window sometimes toggled it. A stroke is crisp when its geometry happens to
+  land on the pixel grid <em>after</em> the full chain of transforms; a container positioned at
+  <code>x = 100.0</code> produces a different sub-pixel phase than the same container at
+  <code>x = 100.5</code> — and Flex/Spark layouts produce fractional positions routinely (percent-width
+  resolvers, centered popups, measured text sizes). Some components were crisp by pure accident of
+  placement, others blurry, and the original reports ("AdvancedDataGrid body lines are blurry only with
+  grouped columns") were downstream of coordinate coincidences, not of the features they seemed to
+  correlate with.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="background"><span class="n">2</span>Rasterization background</h2>
+
+<h3 id="centered">2.1 Strokes are centered on the path</h3>
+<p>
+  Ruffle stores coordinates in twips (1 px = 20 twips) and tessellates ActionScript drawing paths with
+  lyon. Lyon's stroke tessellator centers stroke geometry on the path: a 1px-wide vertical stroke along
+  <code>x = X</code> becomes a quad spanning <code>[X − 0.5, X + 0.5]</code>. When <code>X</code> is an
+  integer — which is what application code almost always writes — both quad edges sit exactly mid-pixel,
+  and the rasterizer (with or without MSAA) covers two pixel columns at ~50% each. The result is a soft,
+  ~2px-looking gray line instead of a solid 1px one.
+</p>
+
+<figure>
+<svg viewBox="0 0 820 250" role="img" aria-labelledby="fig1t fig1d">
+  <title id="fig1t">Figure 1 — stroke quad vs pixel grid</title>
+  <desc id="fig1d">Two pixel grids. Left: a 1px stroke centered on an integer coordinate covers two half columns at 50% alpha. Right: the same stroke with its center snapped to the half-pixel covers exactly one column at 100%.</desc>
+  <!-- left grid -->
+  <g>
+    <text class="s-h" x="205" y="26" text-anchor="middle">center on integer X — blurry</text>
+    <g stroke="var(--border2)" stroke-width="1">
+      <line x1="45" y1="40" x2="45" y2="190"/><line x1="125" y1="40" x2="125" y2="190"/>
+      <line x1="205" y1="40" x2="205" y2="190"/><line x1="285" y1="40" x2="285" y2="190"/>
+      <line x1="365" y1="40" x2="365" y2="190"/>
+      <line x1="45" y1="40" x2="365" y2="40"/><line x1="45" y1="190" x2="365" y2="190"/>
+    </g>
+    <!-- quad centered on x=205 (pixel boundary): spans 165..245, half of two columns -->
+    <rect x="165" y="40" width="80" height="150" fill="var(--warn)" fill-opacity=".28"/>
+    <line x1="205" y1="40" x2="205" y2="190" stroke="var(--warn)" stroke-width="2" stroke-dasharray="5 4"/>
+    <text class="s-s" x="205" y="208" text-anchor="middle">quad (X−0.5, X+0.5) → two columns at ~50%</text>
+    <text class="s-s s-mono" x="205" y="226" text-anchor="middle">center = X (integer)</text>
+  </g>
+  <!-- right grid -->
+  <g>
+    <text class="s-h" x="615" y="26" text-anchor="middle">center snapped to X+0.5 — crisp</text>
+    <g stroke="var(--border2)" stroke-width="1">
+      <line x1="455" y1="40" x2="455" y2="190"/><line x1="535" y1="40" x2="535" y2="190"/>
+      <line x1="615" y1="40" x2="615" y2="190"/><line x1="695" y1="40" x2="695" y2="190"/>
+      <line x1="775" y1="40" x2="775" y2="190"/>
+      <line x1="455" y1="40" x2="775" y2="40"/><line x1="455" y1="190" x2="775" y2="190"/>
+    </g>
+    <!-- quad occupying exactly one column 615..695 -->
+    <rect x="615" y="40" width="80" height="150" fill="var(--good)" fill-opacity=".55"/>
+    <line x1="655" y1="40" x2="655" y2="190" stroke="var(--good)" stroke-width="2" stroke-dasharray="5 4"/>
+    <text class="s-s" x="615" y="208" text-anchor="middle">quad (X, X+1) → one full column, MSAA-stable</text>
+    <text class="s-s s-mono" x="615" y="226" text-anchor="middle">center = X + 0.5</text>
+  </g>
+</svg>
+<figcaption>Figure 1. A 1px stroke rasterizes crisp only when its center sits on a half-pixel, so the
+quad edges land on integer pixel boundaries.</figcaption>
+</figure>
+
+<h3 id="sources">2.2 The two sources of misalignment</h3>
+<p>
+  Crispness is a property of the stroke center in <em>screen space</em>:
+  <code>center = world_transform × path_coordinate</code>. Both factors contribute fractions, and any fix
+  that only looks at one of them is structurally incomplete:
+</p>
+<ul>
+  <li><strong>The world transform.</strong> The host sprite's accumulated translation is fractional whenever
+    a layout places a container at <code>N.5</code> (Spark does this constantly). A path drawn at a perfectly
+    integer local coordinate then lands mid-pixel on screen.</li>
+  <li><strong>The path coordinates themselves.</strong> Spark GraphicElements share their parent Group's
+    canvas sprite: each element draws at its own layout position via
+    <code>moveTo(measuredX + drawX, …)</code>. All the column separators of an <code>s:DataGrid</code>
+    therefore live in <em>one</em> <code>Drawing</code>, each at a different x — with <em>different</em>
+    sub-pixel phases whenever column widths are fractional. No single adjustment of the world matrix can
+    align them all at once.</li>
+</ul>
+
+<h3 id="flash">2.3 What Flash Player does</h3>
+<p>
+  Flash Player's rasterizer snaps 1px orthogonal strokes onto whole pixel rows/columns regardless of the
+  <code>pixelHinting</code> flag — the flag widens the set of snapped cases, but the hairline/1px orthogonal
+  case is always crisp. The same holds for its native text caret and text field borders. Ruffle's tessellate-
+  then-transform pipeline has no equivalent step, which is the gap this branch fills — for the ActionScript
+  drawing path only, since SWF-embedded shapes come pre-authored at whatever coordinates the tool chose,
+  are covered by golden tests, and were not part of any report.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="lessons"><span class="n">3</span>Lessons from the first iteration</h2>
+<p>
+  An earlier iteration of this branch attacked the problem in path space: the tessellator pre-shifted
+  qualifying 1px orthogonal stroke paths by +0.5px perpendicular (so lyon emitted <code>(X, X+1)</code>
+  quads), and <code>Drawing::render</code> floor-snapped the world translation for drawings made
+  <em>exclusively</em> of such strokes. It fixed the original grids but kept breaking on new content, and
+  each failure exposed a structural limit rather than a bug:
+</p>
+<ul>
+  <li><strong>Path-space shifts are defeated by the transform.</strong> The +0.5 pre-shift is correct only if
+    the world translation is integer. The compensating floor-snap applied per-<code>Drawing</code>, all-or-
+    nothing — so a drawing mixing fills and strokes (the DataGrid body!) could never be gated in without
+    dragging its fills along.</li>
+  <li><strong>Rectangle outlines can't take a single perpendicular shift.</strong> A <code>drawRect</code>
+    stroke mixes horizontal and vertical segments; the tessellator-side fix had to bail on them entirely,
+    which is why 1px <code>&lt;s:Rect&gt;</code> skin borders stayed blurry.</li>
+  <li><strong>Shared canvases carry multiple phases.</strong> Separators drawn by different GraphicElements
+    into one <code>Drawing</code> sit at different sub-pixel phases; one translation cannot align them
+    (§2.2).</li>
+  <li><strong>Touching the tessellator touches everything.</strong> The pre-shift applied to SWF-embedded
+    shapes too, which is where most of the golden-test churn in CI came from.</li>
+</ul>
+<p>
+  The redesign keeps exactly one idea from that iteration — the cacheAsBitmap bounds snap of §5, including
+  its hard-earned gating — and replaces the rest with a mechanism that works per <em>run of paths</em>, in
+  <em>screen space</em>, with the final world matrix in hand.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="fix1"><span class="n">4</span>Fix 1 — screen-space per-run stroke snapping</h2>
+<p>
+  All ActionScript-drawn geometry — AVM1 and AVM2 <code>graphics</code>, <code>Shape</code>/<code>Sprite</code>/
+  <code>MovieClip</code>, and Spark's shared canvases — funnels through a single render entry point:
+  <code>Drawing::render</code> in <code>core/src/drawing.rs</code>. That is where the fix lives. The
+  tessellator, the shaders, and the per-backend shape pipelines are untouched.
+</p>
+
+<h3 id="runs">4.1 Render units and runs</h3>
+<p>
+  Previously a <code>Drawing</code> registered one backend shape containing all of its paths and rendered it
+  with the world transform. Now <code>Drawing::render</code> partitions the finalized path list (the same
+  list the single-shape path used — committed paths, then the still-open fill/lines with their auto-close
+  segments) into <strong>runs of consecutive paths</strong>, and registers one shape per run:
+</p>
+<ul>
+  <li>Paths that qualify for snapping (§4.2) and are mutually compatible accumulate into a
+    <em>snappable run</em>, carrying the parameters needed to compute the snap at render time.</li>
+  <li>Everything else — fills, wide or diagonal strokes, gradient strokes, phase-incompatible strokes —
+    accumulates into <em>plain runs</em> that render with the untouched transform, exactly as before.</li>
+</ul>
+<p>
+  Because runs are strictly consecutive slices rendered in the original order, painter's-algorithm
+  compositing is preserved bit-for-bit: overlapping fills and strokes still draw over each other exactly as
+  they would inside a single shape. The partition is cached
+  (<code>render_units: OnceCell&lt;Vec&lt;RenderUnit&gt;&gt;</code>) and invalidated by the same
+  <code>mark_dirty</code> that invalidates the legacy single handle; <code>register_or_replace</code> keeps
+  its old behavior for its other consumer (glyph drawings in <code>font.rs</code>).
+</p>
+<pre><code>pub fn render(&amp;self, context: &amp;mut RenderContext) {
+    if self.is_empty {
+        return;
+    }
+    let units = self
+        .render_units
+        .get_or_init(|| self.build_render_units(context.renderer));
+
+    let base_transform = context.transform_stack.transform();
+    for unit in units {
+        let mut transform = base_transform.clone();
+        if let Some(snap) = unit.snap {
+            snap_hairline_run(&amp;mut transform.matrix, snap);
+        }
+        context
+            .commands
+            .render_shape(unit.handle.clone(), transform);
+    }
+}</code></pre>
+
+<h3 id="qualify">4.2 What qualifies for snapping</h3>
+<p>
+  <code>hairline_snap_profile(style, commands)</code> classifies one stroke path. It returns
+  <code>Some(SnapParams)</code> when every condition holds, <code>None</code> otherwise — and a
+  <code>None</code> path renders exactly as on mainline:
+</p>
+<ul>
+  <li>solid-color stroke (<code>FillStyle::Color</code>; gradient/bitmap strokes are excluded);</li>
+  <li>width ≤ 1px (≤ 20 twips — this includes the SWF hairline, width 0, which rasterizes 1px wide);</li>
+  <li>only <code>MoveTo</code>/<code>LineTo</code> commands, every segment purely horizontal or purely
+    vertical (curves and diagonals disqualify — there is no pixel-aligned target for them, and Flash
+    anti-aliases them too);</li>
+  <li>all vertical segments share the same sub-pixel phase of their x coordinate, and all horizontal
+    segments share the same phase of their y coordinate — phase being
+    <code>twips.rem_euclid(20)</code>. This is what makes a single translation able to align the whole
+    path at once.</li>
+</ul>
+<p>
+  The profile records one <em>sample coordinate per axis</em>: the x of a vertical segment (if any) and the
+  y of a horizontal segment (if any). A rectangle outline therefore qualifies on <em>both</em> axes — the
+  case the previous iteration had to give up on. Two consecutive qualifying paths merge into the same run
+  only if their phases are compatible per axis:
+</p>
+<pre><code>/// Everything needed to compute, at render time, the screen-space
+/// translation that puts a run of 1px orthogonal strokes on the grid.
+struct SnapParams {
+    sample_x: Option&lt;Twips&gt;, // local x of one vertical segment
+    sample_y: Option&lt;Twips&gt;, // local y of one horizontal segment
+}
+
+impl SnapParams {
+    fn try_merge(&amp;self, other: &amp;SnapParams) -&gt; Option&lt;SnapParams&gt; {
+        fn axis(a: Option&lt;Twips&gt;, b: Option&lt;Twips&gt;) -&gt; Result&lt;Option&lt;Twips&gt;, ()&gt; {
+            match (a, b) {
+                (Some(a), Some(b)) if pixel_phase(a) != pixel_phase(b) =&gt; Err(()),
+                _ =&gt; Ok(a.or(b)),
+            }
+        }
+        Some(SnapParams {
+            sample_x: axis(self.sample_x, other.sample_x).ok()?,
+            sample_y: axis(self.sample_y, other.sample_y).ok()?,
+        })
+    }
+}</code></pre>
+<p>
+  Strokes with <em>different</em> phases simply fall into different runs and are snapped independently —
+  this is how a shared Spark canvas with separators at arbitrary fractional columns comes out uniformly
+  crisp, something no per-<code>Drawing</code> scheme could achieve.
+</p>
+
+<h3 id="math">4.3 The snap itself</h3>
+<p>
+  At render time, per snappable run and per axis, the screen-space stroke center is computed from the
+  sample coordinate and the actual matrix coefficients, then moved onto the half-pixel of the pixel that
+  contains it:
+</p>
+<pre><code>const PX: f64 = 20.0; // twips per pixel
+if let Some(sx) = snap.sample_x {
+    let center = matrix.a as f64 * sx.get() as f64 + matrix.tx.get() as f64;
+    let snapped = (center / PX).floor() * PX + PX / 2.0;
+    matrix.tx += Twips::new((snapped - center).round() as i32);
+}
+// … same for sample_y with matrix.d / matrix.ty …</code></pre>
+<p>
+  <code>floor(center) + 0.5</code> is <em>majority coverage</em>: the stroke goes to the pixel that already
+  received most of its ink, so it never moves by more than half a pixel and never "jumps" a column as a
+  container slides across fractions. For the ubiquitous integer-coordinate case it selects the pixel to the
+  right/below of the coordinate line, which matches both the previous iteration's validated output and the
+  placement Flex content was designed around. With the center at <code>N + 0.5</code>, lyon's quad edges
+  land exactly on <code>N</code> and <code>N + 1</code>: one full pixel column, stable under plain AA and
+  MSAA alike (Figure 1).
+</p>
+
+<h3 id="gate">4.4 The rigidity gate</h3>
+<p>
+  Snapping is only meaningful when the shape reaches the screen unscaled and unrotated, so the adjustment
+  applies only when the matrix is a pure translation. The comparison uses a tolerance,
+  <code>SNAP_EPS = 1e-5</code>, because Spark's percent-based layouts accumulate floating-point drift
+  through matrix concatenation (observed around 1e-7): an exact <code>a == 1.0</code> check silently
+  disabled the fix for the very content it targeted. The tolerated drift cannot bias the result, because
+  the center is computed with the actual coefficients (<code>matrix.a * sx</code>), not with an assumed
+  scale of 1. Scaled, rotated, skewed, or flipped drawings render exactly as before — zoomed content is
+  anti-aliased in Flash too.
+</p>
+
+<h3 id="props">4.5 Properties and costs</h3>
+<ul>
+  <li><strong>Degenerate gracefully:</strong> a drawing with no qualifying stroke produces a single plain
+    run — one shape, one draw, identical to mainline. Grid drawings with integer coordinates produce 1–3
+    runs; the worst case (per-column fractional phases) produces one small run per phase.</li>
+  <li><strong>Hit-testing, bounds, and ActionScript-visible state are untouched:</strong> only the
+    translation used for the draw command changes, by at most half a pixel.</li>
+  <li><strong>Re-registration cost is unchanged in kind:</strong> Flex redraws its graphics per
+    <code>updateDisplayList</code>, which already re-registered the single shape; now it re-registers a
+    handful of smaller ones.</li>
+  <li><strong>Backend-agnostic:</strong> the adjustment happens before command recording, so wgpu, webgl and
+    canvas all benefit identically, with no shader changes.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="fix2"><span class="n">5</span>Fix 2 — cacheAsBitmap bounds snap</h2>
+<p>
+  The DataGrid repro had a second, independent cause. <code>Drawing::stretch_bounds</code> expands a
+  drawing's bounds by the stroke radius — ±0.5px for a 1px stroke. When such a drawing sits in a subtree
+  rendered through the bitmap cache (Flex sets <code>lines.cacheAsBitmap = true</code> on its grid-lines
+  sprite), <code>render_base</code> derives the offscreen translation from <code>bounds.x_min</code>: a
+  fractional <code>x_min</code> (say −0.5) shifts <em>every vertex of the subtree</em> by half a pixel
+  inside the cached bitmap. This is how enabling stroke-based horizontal grid lines made the fill-based
+  vertical separators blurry too: the fills were pixel-aligned in isolation, and the cache offset dragged
+  them off the grid.
+</p>
+<p>
+  The fix floors <code>bounds.x_min</code>/<code>y_min</code> to whole pixels before computing the offset —
+  but <em>only</em> when the subtree actually contains an ActionScript-drawn 1px orthogonal stroke, the one
+  condition that produces the artificial half-pixel expansion:
+</p>
+<pre><code>if subtree_contains_drawing_with_hairline_stroke(this) {
+    bounds.x_min = Twips::from_pixels(bounds.x_min.to_pixels().floor());
+    bounds.y_min = Twips::from_pixels(bounds.y_min.to_pixels().floor());
+}</code></pre>
+<p>
+  The gate matters as much as the snap. Fractional cache bounds also arise from legitimate placement —
+  bitmaps intentionally positioned at half-pixel coordinates, filtered content whose offscreen texture must
+  preserve its fractional offset — and snapping those visibly shifts the result: an ungated version of this
+  change failed 16 golden tests across <code>cache_as_bitmap</code> and <code>filters</code>. The gating
+  predicate (<code>Drawing::contains_orthogonal_hairline_stroke</code>) is the permissive cousin of §4.2's
+  profile: it tolerates coexisting fills and requires no phase consistency, because <em>any</em> 1px
+  orthogonal stroke stretches the bounds.
+</p>
+<div class="note"><span class="lbl">Trap — Graphic::drawing_mut() initializes on read</span>
+  The subtree walk needs to <em>inspect</em> each Graphic's dynamic <code>Drawing</code>. The pre-existing
+  accessor, <code>drawing_mut()</code>, is <code>get_or_init</code>-based: merely calling it on a Graphic
+  that never drew installs an empty <code>Drawing</code>, and <code>Graphic::render_self</code> then renders
+  that empty drawing <em>instead of</em> the SWF-embedded <code>shared.shape</code> — the embedded geometry
+  disappears from the screen. An early version of the gate did exactly this and blanked out 18 golden
+  tests. The branch adds a read-only <code>Graphic::drawing() -&gt; Option&lt;Ref&lt;Drawing&gt;&gt;</code>
+  accessor (mirroring the one <code>MovieClip</code> already had) and the rule: tree walkers must never use
+  <code>drawing_mut()</code> for inspection.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="fix3"><span class="n">6</span>Fix 3 — GL line-primitive emulation</h2>
+<p>
+  Text carets, text underlines, and device text field borders don't go through the drawing API: core emits
+  them as <code>CommandHandler::draw_line</code> / <code>draw_line_rect</code> commands, already snapped to
+  the pixel grid by <code>EditTextPixelSnapping</code>. Whether they rasterize crisp then depends entirely
+  on how the backend draws a "line".
+</p>
+<p>
+  The wgpu backend had two paths: hardware line primitives (with a +0.5px nudge so the line runs through
+  pixel centers), and — for Dx12 only — an emulation that draws the line as a 1px quad with whole-pixel
+  edges, added because <em>"DirectX does support drawing lines, but it's very inconsistent. With MSAA,
+  lines have 1.4px thickness"</em>. The catch: wherever GL is implemented <em>on top of</em> DirectX, the GL
+  backend inherits exactly that inconsistency. On Windows, ANGLE translates GL lines into D3D11 lines — and
+  the web build running in any Chromium-based host (browser or Electron) over WebGL2 is precisely wgpu's
+  <code>Backend::Gl</code> on ANGLE. Result: soft, ~1.4px gray carets and text borders on the platform most
+  users run, while native Vulkan/Metal rendered them fine.
+</p>
+<pre><code>// render/wgpu/src/surface/commands.rs
+let emulate_lines = matches!(descriptors.backend, Backend::Dx12 | Backend::Gl);</code></pre>
+<p>
+  The pure-WebGL fallback backend had the same defect (GL <code>LINE_STRIP</code>/<code>LINE_LOOP</code>
+  primitives) and switches to the shared emulation helpers
+  (<code>ruffle_render::lines::emulate_line{,_rect}</code>), which fit a 1px quad between the transformed
+  endpoints — thickness and caps deliberately <em>not</em> transformed — yielding
+  <code>[N, N+1]</code> edges everywhere. Vulkan and Metal keep their hardware-line path, so CI image tests
+  (which run on Vulkan) see no difference.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="coverage"><span class="n">7</span>Coverage</h2>
+<table>
+  <thead><tr><th>Context</th><th>Draw path</th><th>Misalignment source</th><th>Fixed by</th></tr></thead>
+  <tbody>
+    <tr><td><code>mx:DataGrid</code> default (vertical fill-rect separators)</td><td>drawing API, fills</td><td>cache offset when strokes coexist</td><td>§5 (was crisp alone)</td></tr>
+    <tr><td><code>mx:DataGrid</code> + <code>horizontalGridLines</code>, <code>mx:AdvancedDataGrid</code></td><td>drawing API, mixed fill+stroke, cacheAsBitmap</td><td>stroke centering + fractional cache bounds</td><td>§4 + §5</td></tr>
+    <tr><td><code>&lt;s:Line&gt;</code> standalone / in percent-width groups</td><td>drawing API, pure stroke</td><td>fractional world translation</td><td>§4</td></tr>
+    <tr><td><code>s:DataGrid</code> column/header/row separators</td><td>drawing API, shared canvas, per-element offsets</td><td>fractional <em>path</em> coordinates, multiple phases</td><td>§4 (per-run phases)</td></tr>
+    <tr><td>1px <code>&lt;s:Rect&gt;</code> stroke borders, <code>drawRect</code> outlines</td><td>drawing API, mixed-orientation path</td><td>stroke centering on both axes</td><td>§4 (two-axis snap)</td></tr>
+    <tr><td>Text caret, underline, device text field borders</td><td><code>draw_line</code> primitives</td><td>GL-on-DirectX line rasterization</td><td>§6</td></tr>
+  </tbody>
+</table>
+<p><strong>Deliberately out of scope:</strong></p>
+<ul>
+  <li><em>SWF-embedded shapes</em> — authored coordinates, golden-covered, not part of any report; the whole
+    design avoids touching them.</li>
+  <li><em>Zoom / non-integer device pixel ratios</em> — the snap works in movie coordinates like every other
+    snapping mechanism in Ruffle (<code>EditTextPixelSnapping</code>, bitmap <code>PixelSnapping</code>);
+    at 1:1 output scale movie pixels are device pixels.</li>
+  <li><em>Diagonals and curves</em> — anti-aliased in Flash as well.</li>
+  <li><em>Strokes wider than 1px</em> — extendable later: an odd width wants a half-pixel center, an even
+    width an integer one, so the run key would gain a parity component.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="testing"><span class="n">8</span>Testing</h2>
+<h3>8.1 Manual, against real Flex/Spark content</h3>
+<p>
+  All the contexts in §7 verified crisp at rest and across window drags; scaled, rotated and mixed content
+  verified unchanged. The visual position of previously-crisp lines is preserved (majority-coverage
+  snapping picks the same pixel the validated first iteration did for integer coordinates).
+</p>
+<h3>8.2 SWF image test suite</h3>
+<p>Targeted families, local run (wgpu/Vulkan — note that golden images are CI-generated and environment-
+sensitive; the local baseline on the parent commit was clean for every family below):</p>
+<table>
+  <thead><tr><th>Family</th><th>Result</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td><code>visual/cache_as_bitmap</code></td><td>29 / 29</td><td>validates the §5 gate</td></tr>
+    <tr><td><code>visual/filters</code></td><td>23 / 23</td><td>fractional filter offscreens untouched</td></tr>
+    <tr><td><code>visual/opaque_background</code>, <code>visual/simple_shapes</code></td><td>2 / 2, 15 / 15</td><td>regressed under the first iteration's tessellator shift; clean now</td></tr>
+    <tr><td><code>from_shumway</code></td><td>226 / 227</td><td>incl. <code>acid-chars</code> and <code>3_joystick</code>, also first-iteration fallout</td></tr>
+    <tr><td><code>visual/drawing_api</code></td><td>4 / 5</td><td>see below</td></tr>
+  </tbody>
+</table>
+<p>Two golden divergences remain, both of them the fix <em>working</em>, not regressions:</p>
+<ul>
+  <li><strong><code>visual/drawing_api/cursor</code></strong> (400 outliers): the SWF draws two coincident
+    hairlines; the golden records the old two-column blend of both colors. With the fix the line occupies a
+    single column and the last-drawn color wins — which is what Flash Player shows. Golden update
+    proposed.</li>
+  <li><strong><code>from_shumway/acid/acid-shapes-testing</code></strong> (16,120 outliers against the
+    <em>Ruffle-specific</em> <code>output.ruffle.png</code> only): the Flash-generated
+    <code>output.expected.png</code> shows a crisp 1px red rectangle border around every tile; Ruffle
+    historically lost them (issue #12118), and the recorded Ruffle golden reflects that loss. The fix
+    restores the borders — direct evidence of the new rectangle-outline coverage — moving the rendering
+    <em>toward</em> the Flash golden. The Ruffle-specific golden is regenerated on this branch (the test
+    runs at quality "low", aliased and deterministic across environments, so a locally regenerated golden
+    is valid for CI too).</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="appendix"><span class="n">A</span>Appendix — Design notes &amp; rejected approaches</h2>
+<h3>A.1 Why not snap in the vertex shader?</h3>
+<p>
+  A per-vertex <code>round()</code> on the snap axis, applied to draws tagged by the tessellator, would
+  handle per-segment phases without any run splitting. It was rejected because it must be implemented and
+  kept in sync across every backend (wgpu WGSL, webgl GLSL, canvas has no shader at all), it needs the
+  device-pixel mapping inside the shader, and the tagging still requires tessellator changes — the exact
+  coupling this design avoids. The CPU-side per-run adjustment achieves the same result for the content
+  that matters, in one place, backend-agnostically.
+</p>
+<h3>A.2 Why not always floor the cacheAsBitmap bounds?</h3>
+<p>
+  Because fractional bounds are usually intentional. Filters and half-pixel-placed bitmaps rely on the
+  offscreen preserving their exact offset; the ungated floor demonstrably broke 16 golden tests. The stroke
+  radius expansion is the one <em>artificial</em> source of fractional bounds, hence the gate.
+</p>
+<h3>A.3 Why majority coverage instead of a fixed direction?</h3>
+<p>
+  The first iteration effectively forced "the pixel to the right/below" via its +0.5 path shift, which is
+  correct for integer coordinates but biased for fractional ones, and its floor-based translation snap
+  produced a one-pixel visual shift in some skins (a header bottom border detaching from the first row).
+  Snapping the center to the containing pixel keeps every stroke within half a pixel of where the
+  application put it and reduces to the validated behavior in the integer case.
+</p>
+<h3>A.4 Interaction of the three fixes</h3>
+<p>
+  They compose without coordination: inside a cached subtree, §5 makes the offscreen offset whole-pixel and
+  §4 then snaps strokes within that offscreen's own grid; §6 is orthogonal, covering primitives that never
+  enter the drawing pipeline. Each is independently revertible.
+</p>
+
+<div class="footer">
+  Self-contained document — no external dependencies (figures are inline SVG). Light/dark theme follows
+  <code>prefers-color-scheme</code>. Editable directly as a text file. Companion documents:
+  <code>pluggable-font-renderer.html</code>, <code>tile-memory-allocator.html</code>, <code>xml-readonly-improvements.html</code>,
+  <code>xml-general-improvements.html</code>.
+</div>
+
+</div>
+</body>
+</html>

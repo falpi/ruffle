@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en" data-doc="add-text-input-event-dispatch">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Text Input Event Dispatch — Ruffle</title>
+<style>
+    :root{
+        --bg:#ffffff; --surface:#f6f6f4; --surface2:#efeee9;
+        --text:#1d1d1b; --text2:#5f5e5a;
+        --border:#d3d1c7; --border2:#b4b2a9;
+        --accent:#534ab7; --accent-soft:#7f77dd;
+        --good:#1d9e75; --warn:#d85a30; --info:#378add;
+        --code-bg:#f1efe8;
+    }
+    @media (prefers-color-scheme: dark){
+        :root{
+            --bg:#1a1a18; --surface:#242420; --surface2:#2c2c28;
+            --text:#ecece9; --text2:#b4b2a9;
+            --border:#444441; --border2:#5f5e5a;
+            --accent:#afa9ec; --accent-soft:#7f77dd;
+            --good:#5dcaa5; --warn:#f0997b; --info:#85b7eb;
+            --code-bg:#26261f;
+        }
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{
+        margin:0; background:var(--bg); color:var(--text);
+        font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+        font-size:16px; line-height:1.65;
+    }
+    .wrap{max-width:900px; margin:0 auto; padding:48px 28px 96px}
+    header.doc{border-bottom:1px solid var(--border); padding-bottom:24px; margin-bottom:8px}
+    header.doc h1{font-size:30px; margin:0 0 6px; letter-spacing:-.01em}
+    header.doc .sub{color:var(--text2); font-size:15px}
+    header.doc dl{display:grid; grid-template-columns:max-content 1fr; gap:2px 16px; margin:18px 0 0; font-size:13px}
+    header.doc dt{color:var(--text2); text-transform:uppercase; letter-spacing:.05em; font-size:11px; padding-top:2px}
+    header.doc dd{margin:0}
+    header.doc code{font-size:12px}
+    h2{font-size:23px; margin:52px 0 4px; letter-spacing:-.01em; scroll-margin-top:20px}
+    h2 .n{color:var(--accent); font-variant-numeric:tabular-nums; margin-right:10px}
+    h3{font-size:17px; margin:30px 0 4px; scroll-margin-top:20px}
+    h4{font-size:15px; margin:22px 0 2px; color:var(--text)}
+    p{margin:12px 0}
+    a{color:var(--accent)}
+    code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.86em;
+        background:var(--code-bg); padding:.12em .4em; border-radius:4px}
+    pre{background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+        padding:14px 16px; overflow:auto; font-size:12.5px; line-height:1.5}
+    pre code{background:none; padding:0; font-size:inherit}
+    .lead{font-size:18px; color:var(--text)}
+    ul,ol{padding-left:22px} li{margin:5px 0}
+    nav.toc{background:var(--surface); border:1px solid var(--border); border-radius:10px;
+        padding:18px 22px; margin:28px 0 8px}
+    nav.toc strong{display:block; font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+        color:var(--text2); margin-bottom:8px}
+    /* The entry text carries its own hardcoded numbering ("1.", "1.1", …),
+       so the list markers are suppressed. Single column: the list is
+       slightly indented from the "Contents" label, and nested lists are
+       indented further under their section. */
+    nav.toc ol{list-style:none; margin:0; padding:0; font-size:14px}
+    nav.toc > ol{padding-left:24px}
+    nav.toc ol ol{padding-left:18px; margin-top:2px}
+    nav.toc a{text-decoration:none; color:var(--text)}
+    nav.toc a:hover{color:var(--accent)}
+    .note{border-left:3px solid var(--accent); background:var(--surface);
+        padding:12px 16px; border-radius:0 8px 8px 0; margin:18px 0; font-size:15px}
+    .note .lbl{font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.05em;
+        color:var(--text2); display:block; margin-bottom:2px}
+    figure{margin:24px 0; background:var(--surface); border:1px solid var(--border);
+        border-radius:10px; padding:20px}
+    figure svg{display:block; width:100%; height:auto}
+    figcaption{color:var(--text2); font-size:13px; margin-top:12px; text-align:center}
+    table{width:100%; border-collapse:collapse; margin:20px 0; font-size:14px}
+    th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:top}
+    th{font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--text2);
+        border-bottom:2px solid var(--border2)}
+    td code{white-space:nowrap}
+    .footer{margin-top:64px; padding-top:20px; border-top:1px solid var(--border);
+        color:var(--text2); font-size:13px}
+    svg text{font-family:ui-sans-serif,system-ui,sans-serif}
+    .s-h{font-weight:600; fill:var(--text); font-size:12px}
+    .s-t{fill:var(--text); font-size:11px}
+    .s-s{fill:var(--text2); font-size:9px}
+    .s-mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+    .s-box{fill:var(--bg); stroke:var(--border2); stroke-width:1.4}
+    .s-hi{fill:var(--accent); fill-opacity:.13; stroke:var(--accent); stroke-width:1.6}
+    .s-acc{fill:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+    <h1>Text Input Event Dispatch</h1>
+    <div class="sub">Why Flex Spark and Text Layout Framework text fields render but can't be typed into, and the small piece of plumbing that fixes it: deliver <code>TextEvent.TEXT_INPUT</code> to whatever object holds focus, not only to native text fields.</div>
+    <dl>
+        <dt>Project</dt><dd>Ruffle — Flash Player emulator (Rust + WebAssembly)</dd>
+        <dt>Branch</dt><dd><code>add-text-input-event-dispatch</code> (cut from upstream master, PR pending)</dd>
+        <dt>Commit</dt><dd><code>core: Dispatch textInput to focused non-TextField objects</code></dd>
+        <dt>Footprint</dt><dd>1 file, +38/−10 — <code>core/src/player.rs</code></dd>
+        <dt>Audience</dt><dd>Maintainers, reviewers, anyone chasing keyboard input that never reaches a TLF-backed or otherwise custom text component</dd>
+        <dt>Scope</dt><dd>Delivery of character input (<code>TextEvent.TEXT_INPUT</code>) to focused AVM2 interactive objects other than a native text field. The native <code>EditText</code> input path, raw <code>KeyboardEvent</code> dispatch, and IME composition are untouched.</dd>
+    </dl>
+</header>
+
+<p style="margin-top:22px" class="lead">
+    A Flex Spark <code>TextInput</code>, <code>TextArea</code>, or editable <code>ComboBox</code> renders its
+    text in Ruffle and can be focused, but silently ignores the keyboard: nothing you type appears. These
+    controls are not native text fields — they are backed by the Text Layout Framework (TLF), whose
+    <code>EditManager</code> runs on an ordinary <code>Sprite</code> and expects to receive typed characters
+    as a <code>TextEvent.TEXT_INPUT</code>. Ruffle delivered that event only to native <code>EditText</code>
+    objects, so the character never reached TLF and the field could not be edited. This document explains how
+    Flash Player routes keyboard input, the single-channel gap in Ruffle, and the additive fix that closes it
+    without disturbing the well-tested native text-field path.
+</p>
+
+<nav class="toc" aria-label="Contents">
+    <strong>Contents</strong>
+    <ol>
+        <li><a href="#symptom">1. The symptom</a></li>
+        <li><a href="#flash">2. How Flash Player delivers keyboard input</a>
+            <ol>
+                <li><a href="#channels">2.1 Two independent channels</a></li>
+                <li><a href="#tlf">2.2 How TLF-backed components consume it</a></li>
+            </ol>
+        </li>
+        <li><a href="#gap">3. The gap in Ruffle</a>
+            <ol>
+                <li><a href="#gap-textinput">3.1 Text input routed only to native text fields</a></li>
+                <li><a href="#gap-reached">3.2 What already reached the focused object</a></li>
+            </ol>
+        </li>
+        <li><a href="#fix">4. The fix</a>
+            <ol>
+                <li><a href="#dispatch">4.1 Dispatch textInput to the focused object</a></li>
+                <li><a href="#intact">4.2 Leaving the native text-field path intact</a></li>
+            </ol>
+        </li>
+        <li><a href="#fidelity">5. Fidelity and behavior notes</a></li>
+        <li><a href="#impact">6. Impact and coverage</a></li>
+        <li><a href="#testing">7. Testing</a></li>
+    </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="symptom"><span class="n">1</span>The symptom</h2>
+<p>
+    In a Spark component showcase run under Ruffle, every non-text widget behaves: buttons, checkboxes,
+    sliders, lists, dropdowns and data grids render and respond. The text-entry controls are the exception.
+    <code>TextInput</code>, <code>TextArea</code> and the editable <code>ComboBox</code> display their initial
+    content correctly — proof that text composition and rendering work — but pressing keys does nothing. The
+    caret may appear, the field takes focus, yet no character is inserted, nothing is deleted, and the value
+    never changes.
+</p>
+<p>
+    There is no error, no stub warning, and no visual artifact other than an unresponsive field. The initial
+    text is visible because it was composed through the Text Layout Framework onto <code>flash.text.engine</code>
+    lines, which already work; only the <em>interactive</em> path is dead.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="flash"><span class="n">2</span>How Flash Player delivers keyboard input</h2>
+
+<h3 id="channels">2.1 Two independent channels</h3>
+<p>
+    When an interactive object holds focus and the user presses a key, Flash Player delivers the keystroke
+    through two <em>separate</em> event channels, both targeted at the focused object regardless of its type:
+</p>
+<ul>
+    <li><strong><code>KeyboardEvent</code></strong> (<code>keyDown</code> / <code>keyUp</code>) — carries the
+        raw key code and modifiers. Used for navigation and command keys: arrows, backspace, delete, Home/End,
+        and clipboard shortcuts.</li>
+    <li><strong><code>TextEvent</code></strong> of type <code>TEXT_INPUT</code> — carries the actual
+        character(s) produced by the keystroke (respecting layout, shift, dead keys and IME). This is how the
+        <em>content</em> of a keystroke is delivered. It bubbles and is cancelable.</li>
+</ul>
+<p>
+    A native <code>TextField</code> is simply the object that, by default, listens to its own
+    <code>TEXT_INPUT</code> and inserts the character. But the event itself is dispatched to whatever
+    <code>InteractiveObject</code> has focus — a <code>Sprite</code> with focus receives <code>TEXT_INPUT</code>
+    exactly the same way. That is the mechanism any non-<code>TextField</code> text component relies on.
+</p>
+
+<h3 id="tlf">2.2 How TLF-backed components consume it</h3>
+<p>
+    The Flex&nbsp;4 Spark text controls (<code>spark.components.TextInput</code>, <code>TextArea</code>, and the
+    text entry of an editable <code>ComboBox</code>) are all built on
+    <code>spark.components.RichEditableText</code>, which is a <code>Sprite</code>-derived
+    <code>UIComponent</code> — not a <code>TextField</code>. For editing it installs a Text Layout Framework
+    <code>flashx.textLayout.edit.EditManager</code> on its <code>TextFlow</code>. The <code>EditManager</code>
+    (through the container manager) listens for <code>TextEvent.TEXT_INPUT</code> on the container
+    <code>Sprite</code>; on each event it mutates the <code>TextFlow</code> model, then recomposes it through
+    <code>flash.text.engine</code> (<code>TextBlock.createTextLine</code>) into the visible lines.
+</p>
+<div class="note">
+    <span class="lbl">Key point</span>
+    TLF never uses a native <code>TextField</code> for editing. The typed character reaches it only as a
+    <code>TextEvent.TEXT_INPUT</code> dispatched to the focused <code>Sprite</code>. If that event is not
+    delivered, the field is inert no matter how well composition and rendering work.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="gap"><span class="n">3</span>The gap in Ruffle</h2>
+
+<h3 id="gap-textinput">3.1 Text input routed only to native text fields</h3>
+<p>
+    Ruffle turns platform key events into three internal input events — <code>TextInput</code> (a character),
+    <code>TextControl</code> (an editing command such as copy/paste/select-all), and <code>Ime</code>
+    (composition) — and, in <code>player.rs</code>, delivered all three to the focused object <em>only if that
+    object was a native text field</em>:
+</p>
+<pre><code>// Before — player.rs
+if !key_press_handled
+    && let Some(text) = context.focus_tracker.get_as_edit_text()
+{
+    if let InputEvent::TextInput { codepoint } = &amp;event {
+        text.text_input(codepoint.to_string(), context);
+    }
+    if let InputEvent::TextControl { code } = &amp;event {
+        text.text_control_input(*code, context);
+    }
+    if let InputEvent::Ime(ime) = &amp;event {
+        text.ime(ime.clone(), context);
+    }
+}</code></pre>
+<p>
+    <code>FocusTracker::get_as_edit_text()</code> returns <code>Some</code> only when the focused display
+    object is an <code>EditText</code>. When focus was on any other interactive object — a
+    <code>Sprite</code> hosting a TLF <code>EditManager</code>, or any custom text component — the whole block
+    was skipped and the character was silently discarded. It was never dispatched anywhere.
+</p>
+
+<h3 id="gap-reached">3.2 What already reached the focused object</h3>
+<p>
+    Raw <code>KeyboardEvent</code>s were <em>not</em> restricted this way: Ruffle already dispatches
+    <code>keyDown</code>/<code>keyUp</code> to whatever object the focus tracker points at (falling back to the
+    stage), for AVM2 targets. So the focused TLF <code>Sprite</code> did receive arrow keys and backspace as
+    <code>KeyboardEvent</code>s — but with no <code>TEXT_INPUT</code> ever arriving, there was no character to
+    insert in the first place. The asymmetry is exactly the bug: navigation could reach the component, content
+    could not.
+</p>
+
+<figure>
+<svg viewBox="0 0 820 250" role="img" aria-labelledby="fig1t fig1d">
+    <title id="fig1t">Figure 1 — text input delivery to a focused TLF Sprite, before and after</title>
+    <desc id="fig1d">Two panels showing a keyboard source and a focused Sprite hosting a TLF EditManager. On the left, before the fix: the KeyboardEvent arrow reaches the Sprite, but the TextEvent.TEXT_INPUT arrow is dropped before arriving, because only a native TextField received it. On the right, after the fix, matching Flash Player: both arrows reach the Sprite, so the EditManager can insert the character.</desc>
+    <!-- left panel: before -->
+    <g>
+        <text class="s-h" x="205" y="24" text-anchor="middle">Ruffle (before)</text>
+        <rect x="34" y="70" width="92" height="46" rx="6" class="s-box"/>
+        <text class="s-t" x="80" y="98" text-anchor="middle">keyboard</text>
+        <rect x="250" y="58" width="130" height="70" rx="6" class="s-hi"/>
+        <text class="s-t" x="315" y="86" text-anchor="middle">focused Sprite</text>
+        <text class="s-s s-mono" x="315" y="102" text-anchor="middle">TLF EditManager</text>
+        <!-- KeyboardEvent: delivered -->
+        <line x1="126" y1="82" x2="250" y2="82" stroke="var(--good)" stroke-width="2"/>
+        <polygon points="250,82 242,78 242,86" fill="var(--good)"/>
+        <text class="s-s" x="188" y="74" text-anchor="middle">KeyboardEvent ✓</text>
+        <!-- TEXT_INPUT: dropped -->
+        <line x1="126" y1="108" x2="205" y2="108" stroke="var(--warn)" stroke-width="2" stroke-dasharray="5 4"/>
+        <line x1="205" y1="101" x2="219" y2="115" stroke="var(--warn)" stroke-width="2"/>
+        <line x1="219" y1="101" x2="205" y2="115" stroke="var(--warn)" stroke-width="2"/>
+        <text class="s-s" x="150" y="126" text-anchor="middle">TextEvent.TEXT_INPUT</text>
+        <text class="s-s" x="205" y="150" text-anchor="middle">dropped: only a native TextField received it</text>
+        <text class="s-s" x="205" y="166" text-anchor="middle">→ no character to insert, field inert</text>
+    </g>
+    <!-- right panel: after -->
+    <g>
+        <text class="s-h" x="615" y="24" text-anchor="middle">Ruffle (after) — Flash Player</text>
+        <rect x="444" y="70" width="92" height="46" rx="6" class="s-box"/>
+        <text class="s-t" x="490" y="98" text-anchor="middle">keyboard</text>
+        <rect x="660" y="58" width="130" height="70" rx="6" class="s-hi"/>
+        <text class="s-t" x="725" y="86" text-anchor="middle">focused Sprite</text>
+        <text class="s-s s-mono" x="725" y="102" text-anchor="middle">TLF EditManager</text>
+        <!-- KeyboardEvent -->
+        <line x1="536" y1="82" x2="660" y2="82" stroke="var(--good)" stroke-width="2"/>
+        <polygon points="660,82 652,78 652,86" fill="var(--good)"/>
+        <text class="s-s" x="598" y="74" text-anchor="middle">KeyboardEvent ✓</text>
+        <!-- TEXT_INPUT delivered -->
+        <line x1="536" y1="108" x2="660" y2="108" stroke="var(--good)" stroke-width="2"/>
+        <polygon points="660,108 652,104 652,112" fill="var(--good)"/>
+        <text class="s-s" x="598" y="126" text-anchor="middle">TextEvent.TEXT_INPUT ✓</text>
+        <text class="s-s" x="615" y="150" text-anchor="middle">delivered to the focused object, whatever its type</text>
+        <text class="s-s" x="615" y="166" text-anchor="middle">→ EditManager inserts the character</text>
+    </g>
+</svg>
+<figcaption>Figure 1. Only the <code>TEXT_INPUT</code> channel was gated behind "is the focused object a native
+text field?". Raw <code>KeyboardEvent</code>s already reached the focused <code>Sprite</code>; the fix makes
+the character channel behave the same way, as Flash Player does.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="fix"><span class="n">4</span>The fix</h2>
+
+<h3 id="dispatch">4.1 Dispatch textInput to the focused object</h3>
+<p>
+    The block becomes an <code>if</code>/<code>else&nbsp;if</code>: the native <code>EditText</code> path stays
+    first and unchanged; when the focused object is <em>not</em> an <code>EditText</code>, and the input is a
+    character, Ruffle now dispatches a <code>flash.events.TextEvent</code> of type <code>textInput</code>
+    (bubbling and cancelable, matching Flash Player) to the focused AVM2 object:
+</p>
+<pre><code>// After — player.rs (new branch only)
+} else if let InputEvent::TextInput { codepoint } = &amp;event
+    &amp;&amp; let Some(focus) = context.focus_tracker.get()
+{
+    let target = focus.as_displayobject();
+    if target.movie().is_action_script_3()
+        &amp;&amp; let Some(target_object) = target.object2()
+    {
+        let mut activation = Avm2Activation::from_nothing(context);
+        let text = AvmString::new_utf8(activation.gc(), codepoint.to_string());
+        let text_evt = Avm2EventObject::text_event(
+            &amp;mut activation, "textInput", text, true, true);
+        Avm2::dispatch_event(activation.context, text_evt, target_object.into());
+    }
+}</code></pre>
+<p>
+    The event object is built with the same <code>Avm2EventObject::text_event</code> helper that the native
+    <code>EditText</code> already uses to fire its own <code>textInput</code>, so the two paths construct
+    identical events. Dispatch is gated to AVM2 targets (<code>movie().is_action_script_3()</code>),
+    consistent with the neighbouring <code>KeyboardEvent</code> code. A TLF <code>EditManager</code> listening
+    on the focused <code>Sprite</code> now receives the character and inserts it.
+</p>
+
+<h3 id="intact">4.2 Leaving the native text-field path intact</h3>
+<p>
+    Because an <code>EditText</code> is always caught by the first branch (<code>get_as_edit_text()</code>), it
+    never reaches the new code — the native insertion, its own <code>textInput</code> dispatch, restrict
+    filtering, IME and text-control handling are byte-for-byte the same as before. The new branch runs only
+    for focused objects that are <em>not</em> text fields, which previously did nothing at all. The change is
+    strictly additive: it turns a silent drop into a Flash-correct dispatch, and cannot alter any path that
+    already worked.
+</p>
+<div class="note">
+    <span class="lbl">Why additive, not a refactor</span>
+    Flash Player's most literal model is "always dispatch <code>TEXT_INPUT</code> to the focused object; if it
+    is a text field and the event is not canceled, insert". Restructuring the heavily-tested
+    <code>EditText</code> path to that shape would risk regressions in existing text-field behavior for no
+    functional gain here. Keeping the native path untouched and adding a sibling branch delivers the same
+    observable result with none of that risk.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="fidelity"><span class="n">5</span>Fidelity and behavior notes</h2>
+<ul>
+    <li><strong>The event matches Flash Player.</strong> Type <code>textInput</code>, <code>bubbles = true</code>,
+        <code>cancelable = true</code>, <code>text</code> = the typed character. It is dispatched to the focused
+        object and bubbles through its ancestors, so both TLF's listener and any application handler see it.</li>
+    <li><strong>Any focused interactive object receives it, not just text components.</strong> This is
+        Flash-correct: in Flash Player a focused button or plain sprite also receives <code>TEXT_INPUT</code>
+        (harmlessly, with no default action). Restricting delivery to "looks like a text field" would be both
+        wrong and fragile.</li>
+    <li><strong>KeyboardEvents are unchanged.</strong> They already reached focused objects; navigation and
+        command keys (arrows, backspace, clipboard shortcuts) continue to flow through that channel, which is
+        also how TLF handles them.</li>
+    <li><strong>IME composition to non-text-field focus is not yet routed.</strong> Committed IME text and
+        pre-edit composition still take the native <code>EditText</code> path only; wiring them to the focused
+        object is a natural follow-up on the same block. Latin/ASCII typing — the reported gap — is fully
+        covered.</li>
+    <li><strong><code>TextControl</code> (editing commands) stays native-only by design.</strong> For a TLF
+        component these arrive as <code>KeyboardEvent</code>s that its own <code>EditManager</code> interprets,
+        so no synthetic text-control event is needed or wanted.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="impact"><span class="n">6</span>Impact and coverage</h2>
+<p>
+    The immediate beneficiaries are the Flex&nbsp;4 Spark text controls, all of which route editing through a
+    TLF <code>EditManager</code> on a <code>Sprite</code>:
+</p>
+<ul>
+    <li><code>spark.components.TextInput</code> and <code>spark.components.TextArea</code>;</li>
+    <li><code>spark.components.RichEditableText</code> directly;</li>
+    <li>the editable text entry of <code>spark.components.ComboBox</code>.</li>
+</ul>
+<p>
+    Beyond Flex, any AVM2 content that puts a non-<code>TextField</code> interactive object in focus and relies
+    on <code>TextEvent.TEXT_INPUT</code> — custom text editors, in-house UI toolkits, games with typed input on
+    a sprite — now receives typed characters as Flash Player delivers them. Content that focuses native
+    <code>TextField</code>s is entirely unaffected.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="testing"><span class="n">7</span>Testing</h2>
+<ul>
+    <li><strong>Regression suite — no change to the existing path.</strong> The focus and keyboard trace
+        tests pass unchanged: <code>avm2/focus_events_key_basic</code>,
+        <code>avm2/focus_events_key_navigation</code>, <code>avm2/focus_events_key_same_object</code>,
+        <code>avm2/key_input_80percent</code>, <code>avm2/key_input_location</code>,
+        <code>avm2/key_input_numpad</code>, <code>avm2/edittext_input_control</code>, and both
+        <code>avm2/focus_events_mixed_*</code> tests (9 total). The native <code>EditText</code> input path is
+        untouched, so these could not regress — and don't.</li>
+    <li><strong>Build checks.</strong> <code>cargo check</code>, <code>cargo clippy</code> and
+        <code>cargo fmt --check</code> clean on <code>ruffle_core</code>.</li>
+    <li><strong>Visual verification</strong> (Spark component showcase under the Flex build). Before: the
+        <code>TextInput</code>, <code>TextArea</code> and editable <code>ComboBox</code> show their content but
+        ignore the keyboard. After: typed characters are inserted. Follow-up to watch, since it is the
+        untouched half: caret movement and selection driven by arrow keys and backspace, which flow through the
+        <code>KeyboardEvent</code> channel and TLF's own handling; and IME composition, deferred here.</li>
+</ul>
+
+<div class="footer">
+    Self-contained document — no external dependencies (the figure is inline SVG). Light/dark theme follows
+    <code>prefers-color-scheme</code>. Editable directly as a text file. Companion documents:
+    <code>fix-bitmapdata-filter-expansion.html</code>, <code>fix-blurry-grid-separators.html</code>,
+    <code>pluggable-font-renderer.html</code>, <code>tile-memory-allocator.html</code>,
+    <code>xml-readonly-improvements.html</code>, <code>xml-notifications-completion.html</code>.
+</div>
+
+</div>
+</body>
+</html>
