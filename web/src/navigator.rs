@@ -409,7 +409,7 @@ impl NavigatorBackend for WebNavigatorBackend {
             let url = response.url();
             let status = response.status();
             let redirected = response.redirected();
-            if !response.ok() {
+            if !response.ok() && !request.expose_http_errors() {
                 let error = Error::HttpNotOk(
                     format!("Got {}", response.status_text()),
                     status,
