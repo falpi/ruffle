@@ -11,7 +11,6 @@ use crate::avm2::object::{
 };
 use crate::avm2::parameters::ParametersExt;
 use crate::avm2::{Activation, ArrayObject, ArrayStorage, Error, Multiname, Value};
-use crate::avm2_stub_method;
 use crate::string::AvmString;
 
 pub fn init<'gc>(
@@ -73,7 +72,7 @@ pub fn init<'gc>(
                             break;
                         }
                     }
-                    E4XNodeKind::Element { .. } => {
+                    E4XNodeKind::Element(_) => {
                         if single_element_node.is_none() {
                             single_element_node = Some(node);
                         } else {
@@ -205,7 +204,7 @@ pub fn normalize<'gc>(
     let this = this.as_object().unwrap();
 
     let xml = this.as_xml_object().unwrap();
-    xml.node().normalize(activation.gc());
+    xml.node().normalize(activation);
     Ok(xml.into())
 }
 
@@ -400,6 +399,14 @@ pub fn add_namespace<'gc>(
         },
     );
 
+    // avmplus AS3_addNamespace notifies "namespaceAdded".
+    xml.trigger_notification(
+        activation,
+        NotificationCommand::NamespaceAdded,
+        ns.into(),
+        Value::Undefined,
+    );
+
     // 3. Return x
     Ok(this.into())
 }
@@ -428,7 +435,7 @@ pub fn set_namespace<'gc>(
 
     // 2. Let ns2 be a new Namespace created as if by calling the constructor new Namespace(ns)
     let value = args.get_value(0);
-    let ns = activation
+    let ns_object = activation
         .avm2()
         .classes()
         .namespace
@@ -439,8 +446,8 @@ pub fn set_namespace<'gc>(
         .unwrap();
 
     let ns = E4XNamespace {
-        prefix: ns.prefix(),
-        uri: ns.namespace().as_uri(activation.strings()),
+        prefix: ns_object.prefix(),
+        uri: ns_object.namespace().as_uri(activation.strings()),
     };
 
     // 3. Let x.[[Name]] be a new QName created as if by calling the constructor new QName(ns2, x.[[Name]])
@@ -460,6 +467,14 @@ pub fn set_namespace<'gc>(
         // 5.a. Call x.[[AddInScopeNamespace]](ns2)
         node.add_in_scope_namespace(activation.gc(), ns);
     }
+
+    // avmplus AS3_setNamespace notifies "namespaceSet".
+    xml.trigger_notification(
+        activation,
+        NotificationCommand::NamespaceSet,
+        ns_object.into(),
+        Value::Undefined,
+    );
 
     Ok(Value::Undefined)
 }
@@ -482,7 +497,7 @@ pub fn remove_namespace<'gc>(
 
     // 2. Let ns be a Namespace object created as if by calling the function Namespace( namespace )
     let value = args.get_value(0);
-    let ns = activation
+    let ns_object = activation
         .avm2()
         .classes()
         .namespace
@@ -492,8 +507,8 @@ pub fn remove_namespace<'gc>(
         .as_namespace_object()
         .unwrap();
     let ns = E4XNamespace {
-        prefix: ns.prefix(),
-        uri: ns.namespace().as_uri(activation.strings()),
+        prefix: ns_object.prefix(),
+        uri: ns_object.namespace().as_uri(activation.strings()),
     };
 
     // 3. Let thisNS be the result of calling [[GetNamespace]] on x.[[Name]] with argument x.[[InScopeNamespaces]]
@@ -506,9 +521,10 @@ pub fn remove_namespace<'gc>(
     }
 
     {
-        let E4XNodeKind::Element { attributes, .. } = &*node.kind() else {
+        let E4XNodeKind::Element(elem) = &*node.kind() else {
             unreachable!()
         };
+        let attributes = elem.attributes();
 
         // 5. For each a in x.[[Attributes]]
         for attr in attributes {
@@ -522,26 +538,42 @@ pub fn remove_namespace<'gc>(
     }
 
     {
-        let E4XNodeKind::Element { namespaces, .. } = &mut *node.kind_mut(activation.gc()) else {
+        let E4XNodeKind::Element(elem) = &mut *node.kind_mut(activation.gc()) else {
             unreachable!()
         };
-
-        // 6. If ns.prefix == undefined
-        if ns.prefix.is_none() {
-            // 6.a. If there exists a namespace n ∈ x.[[InScopeNamespaces]],
-            // such that n.uri == ns.uri, remove the namespace n from x.[[InScopeNamespaces]]
-            namespaces.retain(|namespace| namespace.uri != ns.uri);
-        // 7. Else
-        } else {
-            // 7.a. If there exists a namespace n ∈ x.[[InScopeNamespaces]],
-            // such that n.uri == ns.uri and n.prefix == ns.prefix, remove the namespace n from x.[[InScopeNamespaces]]
-            namespaces.retain(|namespace| *namespace != ns);
+        // Removal only — if the element declares no namespaces there is
+        // nothing to remove, and we avoid materializing an empty list.
+        if let Some(namespaces) = elem.namespaces.as_deref_mut() {
+            // 6. If ns.prefix == undefined
+            if ns.prefix.is_none() {
+                // 6.a. If there exists a namespace n ∈ x.[[InScopeNamespaces]],
+                // such that n.uri == ns.uri, remove the namespace n from x.[[InScopeNamespaces]]
+                namespaces.retain(|namespace| namespace.uri != ns.uri);
+            // 7. Else
+            } else {
+                // 7.a. If there exists a namespace n ∈ x.[[InScopeNamespaces]],
+                // such that n.uri == ns.uri and n.prefix == ns.prefix, remove the namespace n from x.[[InScopeNamespaces]]
+                namespaces.retain(|namespace| *namespace != ns);
+            }
+        }
+        // Collapse back to the allocation-free representation.
+        if elem.namespaces.as_deref().is_some_and(|v| v.is_empty()) {
+            elem.namespaces = None;
         }
     }
 
-    let E4XNodeKind::Element { children, .. } = &*node.kind() else {
+    // avmplus AS3_removeNamespace notifies "namespaceRemoved".
+    xml.trigger_notification(
+        activation,
+        NotificationCommand::NamespaceRemoved,
+        ns_object.into(),
+        Value::Undefined,
+    );
+
+    let E4XNodeKind::Element(elem) = &*node.kind() else {
         unreachable!()
     };
+    let children = &elem.children;
     // 8. For each property p of x
     for child in children {
         // 8.a. If p.[[Class]] = "element", call the removeNamespace method of p with argument ns
@@ -814,6 +846,12 @@ pub fn call_handler<'gc>(
         if let Some(xml) = obj.as_xml_object() {
             return Ok(xml.into());
         }
+        // Read-only XML masquerades as XML: return it as-is (identity-stable)
+        // rather than copying it into a fresh mutable XML, so callers like
+        // `UIDUtil.getUID` keep a stable object across calls.
+        if let Some(ro) = obj.as_xml_object_read_only() {
+            return Ok(ro.into());
+        }
         // This re-uses the XML object stored in the list
         if let Some(xml_list) = obj.as_xml_list_object() {
             if xml_list.length() == 1 {
@@ -846,7 +884,7 @@ pub fn node_kind<'gc>(
         E4XNodeKind::Comment(_) => b"comment",
         E4XNodeKind::ProcessingInstruction(_) => b"processing-instruction",
         E4XNodeKind::Attribute(_) => b"attribute",
-        E4XNodeKind::Element { .. } => b"element",
+        E4XNodeKind::Element(_) => b"element",
     };
 
     // FIXME should we intern these?
@@ -901,6 +939,9 @@ pub fn prepend_child<'gc>(
     // 1. Call the [[Insert]] method of this object with arguments "0" and value
     xml.node().insert(0, child, activation)?;
 
+    // avmplus AS3_prependChild notifies "nodeAdded".
+    xml.trigger_child_changes(activation, NotificationCommand::NodeAdded, child, None);
+
     // 2. Return x
     Ok(xml.into())
 }
@@ -931,8 +972,8 @@ pub fn text<'gc>(
     let this = this.as_object().unwrap();
 
     let xml = this.as_xml_object().unwrap();
-    let nodes = if let E4XNodeKind::Element { children, .. } = &*xml.node().kind() {
-        children
+    let nodes = if let E4XNodeKind::Element(elem) = &*xml.node().kind() {
+        elem.children
             .iter()
             .filter(|node| node.is_text())
             .map(|node| E4XOrXml::E4X(*node))
@@ -994,8 +1035,8 @@ pub fn comments<'gc>(
     let this = this.as_object().unwrap();
 
     let xml = this.as_xml_object().unwrap();
-    let comments = if let E4XNodeKind::Element { children, .. } = &*xml.node().kind() {
-        children
+    let comments = if let E4XNodeKind::Element(elem) = &*xml.node().kind() {
+        elem.children
             .iter()
             .filter(|node| matches!(&*node.kind(), E4XNodeKind::Comment(_)))
             .map(|node| E4XOrXml::E4X(*node))
@@ -1026,8 +1067,8 @@ pub fn processing_instructions<'gc>(
 
     let xml = this.as_xml_object().unwrap();
     let multiname = name_to_multiname(activation, args.get_value(0), false)?;
-    let nodes = if let E4XNodeKind::Element { children, .. } = &*xml.node().kind() {
-        children
+    let nodes = if let E4XNodeKind::Element(elem) = &*xml.node().kind() {
+        elem.children
             .iter()
             .filter(|node| {
                 matches!(&*node.kind(), E4XNodeKind::ProcessingInstruction(_))
@@ -1083,10 +1124,12 @@ pub fn insert_child_after<'gc>(
         None
     }) {
         // NOTE: We fetch the index separately to avoid borrowing errors.
-        let index = if let E4XNodeKind::Element { children, .. } = &*xml.node().kind() {
+        let index = if let E4XNodeKind::Element(elem) = &*xml.node().kind() {
             // 3.a. For i = 0 to x.[[Length]]-1
             // 3.a.i. If x[i] is the same object as child1
-            children.iter().position(|x| E4XNode::ptr_eq(*x, child1))
+            elem.children
+                .iter()
+                .position(|x| E4XNode::ptr_eq(*x, child1))
         } else {
             None
         };
@@ -1094,6 +1137,8 @@ pub fn insert_child_after<'gc>(
         if let Some(index) = index {
             // 3.a.i.1. Call the [[Insert]] method of x with arguments ToString(i + 1) and child2
             xml.node().insert(index + 1, child2, activation)?;
+            // avmplus AS3_insertChildAfter notifies "nodeAdded".
+            xml.trigger_child_changes(activation, NotificationCommand::NodeAdded, child2, None);
             // 3.a.i.2. Return x
             return Ok(xml.into());
         }
@@ -1101,6 +1146,7 @@ pub fn insert_child_after<'gc>(
     } else if matches!(child1, Value::Null) {
         // 2.a. Call the [[Insert]] method of x with arguments "0" and child2
         xml.node().insert(0, child2, activation)?;
+        xml.trigger_child_changes(activation, NotificationCommand::NodeAdded, child2, None);
         // 2.b. Return x
         return Ok(xml.into());
     }
@@ -1141,10 +1187,12 @@ pub fn insert_child_before<'gc>(
         None
     }) {
         // NOTE: We fetch the index separately to avoid borrowing errors.
-        let index = if let E4XNodeKind::Element { children, .. } = &*xml.node().kind() {
+        let index = if let E4XNodeKind::Element(elem) = &*xml.node().kind() {
             // 3.a. For i = 0 to x.[[Length]]-1
             // 3.a.i. If x[i] is the same object as child1
-            children.iter().position(|x| E4XNode::ptr_eq(*x, child1))
+            elem.children
+                .iter()
+                .position(|x| E4XNode::ptr_eq(*x, child1))
         } else {
             None
         };
@@ -1152,19 +1200,22 @@ pub fn insert_child_before<'gc>(
         if let Some(index) = index {
             // 3.a.i.1. Call the [[Insert]] method of x with arguments ToString(i) and child2
             xml.node().insert(index, child2, activation)?;
+            // avmplus AS3_insertChildBefore notifies "nodeAdded".
+            xml.trigger_child_changes(activation, NotificationCommand::NodeAdded, child2, None);
             // 3.a.i.2. Return x
             return Ok(xml.into());
         }
     // 2. If (child1 == null)
     } else if matches!(child1, Value::Null) {
-        let length = if let E4XNodeKind::Element { children, .. } = &*xml.node().kind() {
-            children.len()
+        let length = if let E4XNodeKind::Element(elem) = &*xml.node().kind() {
+            elem.children.len()
         } else {
             0
         };
 
         // 2.a. Call the [[Insert]] method of x with arguments ToString(x.[[Length]]) and child2
         xml.node().insert(length, child2, activation)?;
+        xml.trigger_child_changes(activation, NotificationCommand::NodeAdded, child2, None);
         // 2.b. Return x
         return Ok(xml.into());
     }
@@ -1217,8 +1268,24 @@ pub fn replace<'gc>(
     if let Some(local_name) = multiname.local_name()
         && let Ok(index) = local_name.parse::<usize>()
     {
+        let prior = if let E4XNodeKind::Element(elem) = &*self_node.kind() {
+            elem.children.get(index).copied()
+        } else {
+            None
+        };
+
         // 4.a. Call the [[Replace]] method of x with arguments P and c and return x
-        self_node.replace(index, value, activation)?;
+        self_node.replace(index, value, None, activation)?;
+
+        // avmplus AS3_replace notifies "nodeChanged" when an existing child was
+        // replaced, "nodeAdded" when the value was appended instead.
+        let command = if prior.is_some() {
+            NotificationCommand::NodeChanged
+        } else {
+            NotificationCommand::NodeAdded
+        };
+        xml.trigger_child_changes(activation, command, value, prior);
+
         return Ok(xml.into());
     }
 
@@ -1229,17 +1296,36 @@ pub fn replace<'gc>(
     //       2. Then we will delete all matches.
     //       2. And then we insert a dummy E4XNode at the previously stored index, and use the replace method to correct it.
 
-    let index =
-        if let Some((index, _)) = self_node.remove_matching_children(activation.gc(), &multiname) {
-            self_node.insert_at(activation.gc(), index, E4XNode::dummy(activation.gc()));
-            index
-        // 8. If i == undefined, return x
-        } else {
-            return Ok(xml.into());
-        };
+    let (matched, removed) = self_node.remove_matching_children(activation.gc(), &multiname);
+
+    // 8. If i == undefined, return x
+    let Some((index, prior)) = matched else {
+        return Ok(xml.into());
+    };
+    self_node.insert_at(activation.gc(), index, E4XNode::dummy(activation.gc()));
 
     // 9. Call the [[Replace]] method of x with arguments ToString(i) and c
-    self_node.replace(index, value, activation)?;
+    self_node.replace(index, value, None, activation)?;
+
+    // avmplus AS3_replace notifies the removal of every matching child beyond
+    // the first, then "nodeChanged" for the replaced one.
+    if self_node.notify_needed() {
+        for extra in removed.iter().skip(1) {
+            let removed_child = XmlObject::new(*extra, activation);
+            xml.trigger_notification(
+                activation,
+                NotificationCommand::NodeRemoved,
+                removed_child.into(),
+                Value::Undefined,
+            );
+        }
+    }
+    xml.trigger_child_changes(
+        activation,
+        NotificationCommand::NodeChanged,
+        value,
+        Some(prior),
+    );
 
     // 10. Return x
     Ok(xml.into())
@@ -1319,7 +1405,6 @@ pub fn set_notification<'gc>(
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
-    avm2_stub_method!(activation, "XML", "setNotification");
     let xml = this.as_xml_object().unwrap();
     let node = xml.node();
     let func = args.try_get_function(0);

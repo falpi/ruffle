@@ -67,7 +67,15 @@ pub struct XmlObjectData<'gc> {
 pub enum NotificationCommand {
     AttributeAdded,
     AttributeChanged,
+    AttributeRemoved,
     NameSet,
+    NamespaceAdded,
+    NamespaceRemoved,
+    NamespaceSet,
+    NodeAdded,
+    NodeChanged,
+    NodeRemoved,
+    TextSet,
 }
 
 impl<'gc> XmlObject<'gc> {
@@ -86,13 +94,9 @@ impl<'gc> XmlObject<'gc> {
         activation: &mut Activation<'_, 'gc>,
         name: &Multiname<'gc>,
     ) -> XmlListObject<'gc> {
-        let matched_children = if let E4XNodeKind::Element {
-            children,
-            attributes,
-            ..
-        } = &*self.0.node.get().kind()
-        {
-            let search_children = if name.is_attribute() {
+        let matched_children = if let E4XNodeKind::Element(elem) = &*self.0.node.get().kind() {
+            let (children, attributes) = (&elem.children, elem.attributes());
+            let search_children: &[E4XNode<'gc>] = if name.is_attribute() {
                 attributes
             } else {
                 children
@@ -138,8 +142,8 @@ impl<'gc> XmlObject<'gc> {
         if let Some(local_name) = name.local_name()
             && let Ok(index) = local_name.parse::<usize>()
         {
-            let result = if let E4XNodeKind::Element { children, .. } = &*self.node().kind() {
-                if let Some(node) = children.get(index) {
+            let result = if let E4XNodeKind::Element(elem) = &*self.node().kind() {
+                if let Some(node) = elem.children.get(index) {
                     vec![E4XOrXml::E4X(*node)]
                 } else {
                     Vec::new()
@@ -168,8 +172,8 @@ impl<'gc> XmlObject<'gc> {
         name: &Multiname<'gc>,
         activation: &mut Activation<'_, 'gc>,
     ) -> XmlListObject<'gc> {
-        let children = if let E4XNodeKind::Element { children, .. } = &*self.node().kind() {
-            children
+        let children = if let E4XNodeKind::Element(elem) = &*self.node().kind() {
+            elem.children
                 .iter()
                 .filter(|node| node.is_element() && node.matches_name(name))
                 .map(|node| E4XOrXml::E4X(*node))
@@ -307,7 +311,15 @@ impl<'gc> XmlObject<'gc> {
                 let command = match command {
                     NotificationCommand::AttributeAdded => istr!("attributeAdded"),
                     NotificationCommand::AttributeChanged => istr!("attributeChanged"),
+                    NotificationCommand::AttributeRemoved => istr!("attributeRemoved"),
                     NotificationCommand::NameSet => istr!("nameSet"),
+                    NotificationCommand::NamespaceAdded => istr!("namespaceAdded"),
+                    NotificationCommand::NamespaceRemoved => istr!("namespaceRemoved"),
+                    NotificationCommand::NamespaceSet => istr!("namespaceSet"),
+                    NotificationCommand::NodeAdded => istr!("nodeAdded"),
+                    NotificationCommand::NodeChanged => istr!("nodeChanged"),
+                    NotificationCommand::NodeRemoved => istr!("nodeRemoved"),
+                    NotificationCommand::TextSet => istr!("textSet"),
                 };
                 let args = [
                     current_target.into(),
@@ -320,6 +332,36 @@ impl<'gc> XmlObject<'gc> {
             }
             current_node = current.parent();
         }
+    }
+
+    /// Equivalent of avmplus `XMLObject::childChanges`: trigger a notification
+    /// for a child mutation of this node. Mirroring avmplus, this only fires
+    /// when `value` is an XML or XMLList object; `prior` (the replaced node, if
+    /// any) is passed as the notification detail.
+    pub fn trigger_child_changes(
+        self,
+        activation: &mut Activation<'_, 'gc>,
+        command: NotificationCommand,
+        value: Value<'gc>,
+        prior: Option<E4XNode<'gc>>,
+    ) {
+        if !self.node().notify_needed() {
+            return;
+        }
+
+        if !value
+            .as_object()
+            .is_some_and(|x| x.as_xml_object().is_some() || x.as_xml_list_object().is_some())
+        {
+            return;
+        }
+
+        let detail = match prior {
+            Some(node) => XmlObject::new(node, activation).into(),
+            None => Value::Undefined,
+        };
+
+        self.trigger_notification(activation, command, value, detail);
     }
 }
 
@@ -527,7 +569,7 @@ impl<'gc> TObject<'gc> for XmlObject<'gc> {
             //        and ((n.[[Name]].uri == null) or (n.[[Name]].uri == j.[[Name]].uri))
             // 6.e.i.1. If (a == null), a = j
             // 6.e.i.2. Else call the [[Delete]] method of x with argument j.[[Name]]
-            if let Some((index, old_attr)) = self.node().remove_matching_attribute(gc, &name) {
+            if let (Some((index, old_attr)), _) = self.node().remove_matching_attribute(gc, &name) {
                 // NOTE: In this branch we modify the value of the first matching attribute.
                 let old_value = {
                     // 6.g. Let a.[[Value]] = c
@@ -538,11 +580,11 @@ impl<'gc> TObject<'gc> for XmlObject<'gc> {
                     *old_value = value;
 
                     let node = self.0.node.get();
-                    let E4XNodeKind::Element { attributes, .. } = &mut *node.kind_mut(gc) else {
+                    let E4XNodeKind::Element(elem) = &mut *node.kind_mut(gc) else {
                         return Ok(());
                     };
                     old_attr.set_parent(Some(self.node()), gc);
-                    attributes.insert(index, old_attr);
+                    elem.attributes_mut().insert(index, old_attr);
                     old_value_copy
                 };
 
@@ -569,10 +611,10 @@ impl<'gc> TObject<'gc> for XmlObject<'gc> {
                 {
                     // 6.f.iv. Let x.[[Attributes]] = x.[[Attributes]] ∪ { a }
                     let node = self.0.node.get();
-                    let E4XNodeKind::Element { attributes, .. } = &mut *node.kind_mut(gc) else {
+                    let E4XNodeKind::Element(elem) = &mut *node.kind_mut(gc) else {
                         return Ok(());
                     };
-                    attributes.push(attr);
+                    elem.attributes_mut().push(attr);
                 }
 
                 self.trigger_notification(
@@ -605,12 +647,32 @@ impl<'gc> TObject<'gc> for XmlObject<'gc> {
 
         let self_node = self.node();
 
+        // Fast path check for change notifications (avmplus `notifyNeeded`),
+        // so unwatched trees don't pay for building notification arguments.
+        let notify = self_node.notify_needed();
+
         // 9. Let i = undefined
         // 11.
-        let index = self_node.remove_matching_children(activation.gc(), &name);
+        let (matched, removed) = self_node.remove_matching_children(activation.gc(), &name);
+        let existed = matched.is_some();
 
-        let index = if let Some((index, node)) = index {
+        let index = if let Some((index, node)) = matched {
             self_node.insert_at(activation.gc(), index, node);
+
+            // avmplus notifies the removal of every matching child beyond the
+            // first, which was kept and re-inserted above.
+            if notify {
+                for extra in removed.iter().skip(1) {
+                    let removed_child = XmlObject::new(*extra, activation);
+                    self.trigger_notification(
+                        activation,
+                        NotificationCommand::NodeRemoved,
+                        removed_child.into(),
+                        Value::Undefined,
+                    );
+                }
+            }
+
             index
         // 12. If i == undefined
         } else {
@@ -634,9 +696,26 @@ impl<'gc> TObject<'gc> for XmlObject<'gc> {
                     Some(self_node),
                 );
                 // 12.b.v. Call the [[Replace]] method of x with arguments ToString(i) and y
-                self_node.replace(index, XmlObject::new(node, activation).into(), activation)?;
+                self_node.replace(
+                    index,
+                    XmlObject::new(node, activation).into(),
+                    None,
+                    activation,
+                )?;
                 // FIXME: 12.b.iv. Let ns be the result of calling [[GetNamespace]] on name with no arguments
                 // 12.b.vi. Call [[AddInScopeNamespace]] on y with argument ns
+
+                // avmplus notifies the newly created element; the "textSet" for
+                // its content follows from step 13's [[Replace]].
+                if notify {
+                    let added = XmlObject::new(node, activation);
+                    self.trigger_notification(
+                        activation,
+                        NotificationCommand::NodeAdded,
+                        added.into(),
+                        Value::Undefined,
+                    );
+                }
             }
 
             index
@@ -644,25 +723,53 @@ impl<'gc> TObject<'gc> for XmlObject<'gc> {
 
         // 13. If (primitiveAssign == true)
         if primitive_assign {
-            let E4XNodeKind::Element { children, .. } = &mut *self_node.kind_mut(activation.gc())
-            else {
-                unreachable!("Node should be of Element kind");
+            // NOTE: The child is extracted in its own scope so that no borrow is
+            //       held when [[Replace]] triggers a "textSet" notification below.
+            let child = {
+                let E4XNodeKind::Element(elem) = &mut *self_node.kind_mut(activation.gc()) else {
+                    unreachable!("Node should be of Element kind");
+                };
+                elem.children[index]
+            };
+
+            // avmplus captures the first child before clearing, so the "textSet"
+            // below can still report the replaced content as detail.
+            let past_value = if notify {
+                let first = {
+                    let E4XNodeKind::Element(elem) = &*child.kind() else {
+                        unreachable!("Node should be of Element kind");
+                    };
+                    elem.children.first().copied()
+                };
+                first.map(|node| XmlObject::new(node, activation).into())
+            } else {
+                None
             };
 
             // 13.a. Delete all the properties of the XML object x[i]
-            children[index].remove_all_children(activation.gc());
+            child.remove_all_children(activation.gc());
 
             // 13.b. Let s = ToString(c)
             let val = value.coerce_to_string(activation)?;
 
             // 13.c. If s is not the empty string, call the [[Replace]] method of x[i] with arguments "0" and s
             if !val.is_empty() {
-                children[index].replace(0, value, activation)?;
+                child.replace(0, value, past_value, activation)?;
             }
         // 14. Else
         } else {
             // 14.a. Call the [[Replace]] method of x with arguments ToString(i) and c
-            self_node.replace(index, value, activation)?;
+            self_node.replace(index, value, None, activation)?;
+
+            // avmplus setMultinameProperty: replacing an existing child notifies
+            // "nodeChanged" with the old node as detail, appending a new one
+            // notifies "nodeAdded".
+            let command = if existed {
+                NotificationCommand::NodeChanged
+            } else {
+                NotificationCommand::NodeAdded
+            };
+            self.trigger_child_changes(activation, command, value, matched.map(|(_, node)| node));
         }
 
         // 15. Return
@@ -721,6 +828,9 @@ impl<'gc> TObject<'gc> for XmlObject<'gc> {
 
         // 2. Let n = ToXMLName(P)
 
+        // Fast path check for change notifications (avmplus `notifyNeeded`).
+        let notify = node.notify_needed();
+
         // 3. If Type(n) is AttributeName
         if name.is_attribute() {
             // 3.a. For each a in x.[[Attributes]]
@@ -729,36 +839,71 @@ impl<'gc> TObject<'gc> for XmlObject<'gc> {
             //        and ((n.[[Name]].uri == null) or (n.[[Name]].uri == a.[[Name]].uri))
             // 3.a.i.1. Let a.[[Parent]] = null
             // 3.a.i.2. Remove the attribute a from x.[[Attributes]]
-            node.remove_matching_attribute(activation.gc(), &name);
+            let (_, removed) = node.remove_matching_attribute(activation.gc(), &name);
+
+            // avmplus deleteMultinameProperty notifies "attributeRemoved" with
+            // the attribute name and its old value.
+            if notify {
+                for attr in removed {
+                    let attr_name = attr.local_name().map_or(Value::Undefined, Value::from);
+                    let old_value = attr.node_value().map_or(Value::Undefined, Value::from);
+                    self.trigger_notification(
+                        activation,
+                        NotificationCommand::AttributeRemoved,
+                        attr_name,
+                        old_value,
+                    );
+                }
+            }
 
             // 3.b. Return true
             return Ok(true);
         }
 
-        let E4XNodeKind::Element { children, .. } = &mut *node.kind_mut(activation.gc()) else {
-            return Ok(true);
-        };
+        let mut removed_children = Vec::new();
 
-        // 4. Let dp = 0
-        // 5. For q = 0 to x.[[Length]]-1
-        children.retain(|child| {
-            // 5.a. If ((n.localName == "*")
-            //   or (x[q].[[Class]] == "element" and x[q].[[Name]].localName == n.localName))
-            //   and ((n.uri == null) or (x[q].[[Class]] == “element” and n.uri == x[q].[[Name]].uri ))
-            let should_retain = if name.is_any_name() {
-                false
-            } else if child.is_element() {
-                !child.matches_name(&name)
-            } else {
-                true
+        {
+            let E4XNodeKind::Element(elem) = &mut *node.kind_mut(activation.gc()) else {
+                return Ok(true);
             };
+            let children = &mut elem.children;
 
-            if !should_retain {
-                child.set_parent(None, activation.gc());
-            }
+            // 4. Let dp = 0
+            // 5. For q = 0 to x.[[Length]]-1
+            children.retain(|child| {
+                // 5.a. If ((n.localName == "*")
+                //   or (x[q].[[Class]] == "element" and x[q].[[Name]].localName == n.localName))
+                //   and ((n.uri == null) or (x[q].[[Class]] == “element” and n.uri == x[q].[[Name]].uri ))
+                let should_retain = if name.is_any_name() {
+                    false
+                } else if child.is_element() {
+                    !child.matches_name(&name)
+                } else {
+                    true
+                };
 
-            should_retain
-        });
+                if !should_retain {
+                    child.set_parent(None, activation.gc());
+                    if notify {
+                        removed_children.push(*child);
+                    }
+                }
+
+                should_retain
+            });
+        }
+
+        // avmplus deleteMultinameProperty notifies "nodeRemoved" for each
+        // removed child.
+        for child in removed_children {
+            let removed_child = XmlObject::new(child, activation);
+            self.trigger_notification(
+                activation,
+                NotificationCommand::NodeRemoved,
+                removed_child.into(),
+                Value::Undefined,
+            );
+        }
 
         // 6. Let x.[[Length]] = x.[[Length]] - dp
         // 7. Return true.

@@ -20,6 +20,7 @@ mod boolean;
 mod class;
 mod date;
 mod error;
+mod export_utils;
 pub mod flash;
 mod function;
 pub mod global_scope;
@@ -43,6 +44,7 @@ mod vector_uint;
 mod void;
 mod xml;
 mod xml_list;
+mod xml_read_only;
 
 pub use toplevel::decode_uri;
 pub use toplevel::decode_uri_component;
@@ -80,6 +82,7 @@ pub struct SystemClasses<'gc> {
     pub video: ClassObject<'gc>,
     pub xml: ClassObject<'gc>,
     pub xml_list: ClassObject<'gc>,
+    pub xml_read_only: ClassObject<'gc>,
     pub display_object: ClassObject<'gc>,
     pub shape: ClassObject<'gc>,
     pub textfield: ClassObject<'gc>,
@@ -201,6 +204,7 @@ pub struct SystemClassDefs<'gc> {
     pub uint: Class<'gc>,
     pub xml: Class<'gc>,
     pub xml_list: Class<'gc>,
+    pub xml_read_only: Class<'gc>,
 
     // Vector.<Number> aka Vector$double
     pub number_vector: Class<'gc>,
@@ -262,6 +266,7 @@ impl<'gc> SystemClasses<'gc> {
             video: object,
             xml: object,
             xml_list: object,
+            xml_read_only: object,
             display_object: object,
             shape: object,
             textfield: object,
@@ -384,6 +389,7 @@ impl<'gc> SystemClassDefs<'gc> {
             uint: object,
             xml: object,
             xml_list: object,
+            xml_read_only: object,
 
             number_vector: object,
             int_vector: object,
@@ -641,6 +647,7 @@ pub fn init_builtin_system_classes(activation: &mut Activation<'_, '_>) {
             ("", "VerifyError", verifyerror),
             ("", "XML", xml),
             ("", "XMLList", xml_list),
+            ("", "XMLReadOnly", xml_read_only),
             ("__AS3__.vec", "Vector", generic_vector),
         ]
     );
@@ -662,6 +669,7 @@ pub fn init_builtin_system_class_defs(activation: &mut Activation<'_, '_>) {
             ("", "uint", uint),
             ("", "XML", xml),
             ("", "XMLList", xml_list),
+            ("", "XMLReadOnly", xml_read_only),
             ("__AS3__.vec", "Vector", generic_vector),
         ]
     );
@@ -676,6 +684,8 @@ pub fn init_builtin_system_class_defs(activation: &mut Activation<'_, '_>) {
     class_defs.object.mark_builtin_type(BuiltinType::Object);
     class_defs.string.mark_builtin_type(BuiltinType::String);
     class_defs.void.mark_builtin_type(BuiltinType::Void);
+    // Lets the read-only XML type report `is XML` true without subclassing XML.
+    class_defs.xml.mark_builtin_type(BuiltinType::Xml);
 
     crate::avm2::globals::vector::init_vector_class_defs(activation);
 }
